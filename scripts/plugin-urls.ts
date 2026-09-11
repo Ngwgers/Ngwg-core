@@ -21,14 +21,25 @@ if (configPath) {
   for (const [name, url] of Object.entries(cfg?.plugins ?? {})) {
     if (typeof url === "string" && url.trim()) console.log(`user\t${name}\t${url.trim()}`);
   }
-  const theme = cfg?.theme;
-  // resolve theme.yaml to read its plugin declarations too
+  // theme may be a string or a { <name-or-path>: { overrides } } map
+  const theme = typeof cfg?.theme === "object" && cfg?.theme !== null ? Object.keys(cfg.theme)[0] : cfg?.theme;
+  // resolve theme.yaml to read its plugin declarations too; the CLI exports
+  // NGWG_DEFAULT_THEME (the ensured official default theme) — it only counts
+  // when its manifest name actually matches the configured theme
   const candidates: string[] = [];
   if (typeof theme === "string") {
     if (theme.includes("/") || theme.startsWith(".")) candidates.push(path.resolve(root, theme));
     if (process.env.NGWG_THEMES) candidates.push(path.join(process.env.NGWG_THEMES, theme));
     if (process.env.HOME) candidates.push(path.join(process.env.HOME, ".ngwg", "themes", theme));
-    if (theme === "pacific") candidates.push(path.resolve(import.meta.dir, "../../..", "Ngwg-default-theme"));
+    const fallback = process.env.NGWG_DEFAULT_THEME;
+    if (fallback && existsSync(path.join(fallback, "theme.yaml"))) {
+      try {
+        const manifest = parseYaml(readFileSync(path.join(fallback, "theme.yaml"), "utf8"));
+        if (manifest?.name === theme) candidates.push(fallback);
+      } catch {
+        /* unreadable manifest — skip the fallback */
+      }
+    }
   }
   const themeRoot = candidates.find((p) => existsSync(path.join(p, "theme.yaml")));
   if (themeRoot) {

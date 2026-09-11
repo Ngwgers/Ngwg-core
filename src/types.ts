@@ -97,8 +97,18 @@ export interface UserConfig {
   baseurl?: string;
   /** site origin for absolute URLs (RSS, sitemap, canonical), e.g. "https://example.com" */
   url?: string;
-  /** theme name (resolved from bundled themes) or a filesystem path */
-  theme: string;
+  /**
+   * theme name (resolved from bundled themes) or a filesystem path — or a
+   * map with exactly one such key whose value overrides the theme's own
+   * config, so users can tweak a theme without editing it:
+   *
+   *   theme:
+   *     pacific:
+   *       per_page: 5
+   *       layouts:
+   *         post: post
+   */
+  theme: string | Record<string, Record<string, any>>;
   source_dir?: string;
   public_dir?: string;
   /** plugin name -> URL (remote repo or local path) */

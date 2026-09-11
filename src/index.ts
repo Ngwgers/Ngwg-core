@@ -42,12 +42,15 @@ export { Watcher, planReload } from "./dev/watcher.ts";
 export { Logger, setLogLevel, getLogLevel, trace, type LogLevel } from "./util/log.ts";
 export { Pool, PoolAborted } from "./util/pool.ts";
 
-import { Engine } from "./core/engine.ts";
+import { Engine, type EngineOptions } from "./core/engine.ts";
 import { Logger } from "./util/log.ts";
 
 /** Run one full build (pipeline steps 1-9) for the site rooted at rootDir. */
-export async function build(rootDir: string, opts: { log?: Logger } = {}): Promise<Engine> {
-  const engine = new Engine(rootDir, { log: opts.log });
+export async function build(
+  rootDir: string,
+  opts: EngineOptions & { log?: Logger } = {},
+): Promise<Engine> {
+  const engine = new Engine(rootDir, opts);
   await engine.run({ reset: "all" });
   return engine;
 }

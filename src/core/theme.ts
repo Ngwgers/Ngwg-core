@@ -11,18 +11,27 @@ import { trace } from "../util/log.ts";
 import { loadThemeConfig } from "../config/loader.ts";
 import type { ThemeConfig, ThemeObject } from "../types.ts";
 
-const CORE_ROOT = path.resolve(import.meta.dir, "../..");
-const DEFAULT_THEME_NAME = "pacific";
-
 export class ThemeError extends Error {}
+
+export interface DefaultTheme {
+  /** theme name this fallback answers to (e.g. "pacific") */
+  name: string;
+  /** local directory of the fallback theme (ensured by the CLI) */
+  dir: string;
+}
 
 /**
  * Resolve the configured theme to a directory.
  *  - path containing "/" or starting with "." → relative to project root
- *  - bare name → look in $NGWG_THEMES, ~/.ngwg/themes/<name>, then bundled
- *    default theme when the name matches (default: "pacific").
+ *  - bare name → look in $NGWG_THEMES, ~/.ngwg/themes/<name>, then the
+ *    caller-provided fallback (the CLI ensures the official default theme;
+ *    Core itself knows no default theme directories).
  */
-export async function resolveThemeDir(theme: string, rootDir: string): Promise<string> {
+export async function resolveThemeDir(
+  theme: string,
+  rootDir: string,
+  fallback?: DefaultTheme,
+): Promise<string> {
   const candidates: string[] = [];
 
   if (theme.includes("/") || theme.startsWith(".")) {
@@ -31,7 +40,7 @@ export async function resolveThemeDir(theme: string, rootDir: string): Promise<s
     if (process.env.NGWG_THEMES) candidates.push(path.join(process.env.NGWG_THEMES, theme));
     const home = process.env.HOME;
     if (home) candidates.push(path.join(home, ".ngwg", "themes", theme));
-    if (theme === DEFAULT_THEME_NAME) candidates.push(path.resolve(CORE_ROOT, "..", "Ngwg-default-theme"));
+    if (fallback && theme === fallback.name) candidates.push(fallback.dir);
   }
 
   for (const c of candidates) {
@@ -53,8 +62,25 @@ const DEFAULT_LAYOUTS: Record<string, string> = {
   category: "category",
 };
 
-export async function loadTheme(themeRoot: string): Promise<ThemeObject> {
-  const config: ThemeConfig = await loadThemeConfig(themeRoot);
+/**
+ * Deep-merge user overrides onto the theme's own config. Plain objects are
+ * merged key-by-key (so `layouts` and `plugins.required` overrides add to
+ * the theme's own entries); everything else (scalars, arrays) replaces.
+ */
+export function mergeThemeConfig(base: ThemeConfig, overrides: Record<string, any>): ThemeConfig {
+  const out: Record<string, any> = { ...base };
+  for (const [k, v] of Object.entries(overrides)) {
+    const cur = out[k];
+    out[k] =
+      v && typeof v === "object" && !Array.isArray(v) && cur && typeof cur === "object" && !Array.isArray(cur)
+        ? mergeThemeConfig(cur as ThemeConfig, v as Record<string, any>)
+        : v;
+  }
+  return out as ThemeConfig;
+}
+
+export async function loadTheme(themeRoot: string, overrides?: Record<string, any>): Promise<ThemeObject> {
+  const config = mergeThemeConfig(await loadThemeConfig(themeRoot), overrides ?? {});
   if (!config.name) throw new ThemeError(`theme.yaml at ${themeRoot} is missing required field "name"`);
 
   const layouts: Record<string, string> = {};

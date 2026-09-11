@@ -58,6 +58,11 @@ export class PluginLoadError extends Error {
 }
 
 const CORE_ROOT = path.resolve(import.meta.dir, "../..");
+/**
+ * Path of the plugin-management fish script. Resolved relative to THIS file
+ * so it stays correct no matter where the core itself was loaded from
+ * (monorepo checkout, ~/.ngwg or a project's .ngwg/core download).
+ */
 export const PLUGIN_SCRIPT = path.join(CORE_ROOT, "scripts", "ngwg-plugins.fish");
 
 export function pluginStoreDir(rootDir: string): string {
@@ -211,6 +216,13 @@ export interface LoadAllOptions {
   queue: EventQueue;
   /** creates the per-plugin context (engine wires events/config in) */
   makeContext: (pluginName: string, trusted: boolean) => PluginContext;
+  /**
+   * fallback declarations injected by the caller (the CLI hardcodes the
+   * official files/feature URLs there). Used only when neither the user
+   * config nor the theme declares a plugin with that key — Core itself
+   * ships no bundled plugins and knows no default URLs.
+   */
+  defaultPlugins?: Record<string, string>;
 }
 
 export interface LoadAllResult {
@@ -222,20 +234,11 @@ export interface LoadAllResult {
   helperMap: Record<string, (...args: any[]) => any>;
 }
 
-export const MUST_LOAD_PLUGINS: Record<string, string> = {
-  files: "bundled:Ngwg-files",
-  feature: "bundled:Ngwg-feature",
-};
-
-function bundledPluginPath(name: string): string {
-  return path.resolve(CORE_ROOT, "..", name);
-}
-
 /**
- * Load every declared plugin (user config + theme config), plus the
- * must-load plugins (files & feature) which fall back to bundled copies
- * shipped next to Ngwg-core. Any load failure aborts the build: we log a
- * warning and throw so the CLI exits non-zero.
+ * Load every declared plugin (user config + theme config), falling back to
+ * caller-provided defaults for keys nobody declared (the CLI passes the
+ * official files/feature URLs there). Any load failure aborts the build:
+ * we log a warning and throw so the CLI exits non-zero.
  */
 export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResult> {
   const { rootDir, config, themeConfig, log, queue } = opts;
@@ -247,13 +250,9 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
     declarations[k] = v;
   }
   Object.assign(declarations, config.plugins ?? {});
-
-  // must-load plugins always present; bundled copies as fallback
-  for (const [key, fallback] of Object.entries(MUST_LOAD_PLUGINS)) {
-    if (!declarations[key]) {
-      if (fallback === "bundled:Ngwg-files") declarations[key] = bundledPluginPath("Ngwg-files");
-      else if (fallback === "bundled:Ngwg-feature") declarations[key] = bundledPluginPath("Ngwg-feature");
-    }
+  // caller defaults last: they only fill keys nobody declared explicitly
+  for (const [k, v] of Object.entries(opts.defaultPlugins ?? {})) {
+    if (!declarations[k]) declarations[k] = v;
   }
 
   // optional theme plugins: never fetched, only hinted — and only when the

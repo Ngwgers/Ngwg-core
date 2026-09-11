@@ -74,8 +74,24 @@ export function validateUserConfig(config: UserConfig, configFile: string): stri
   if (typeof config.title !== "string" || !config.title.trim()) {
     errors.push(`${configFile}: required field "title" is missing or empty`);
   }
-  if (typeof config.theme !== "string" || !config.theme.trim()) {
+  if (config.theme === undefined || config.theme === null || config.theme === "") {
     errors.push(`${configFile}: required field "theme" is missing — set it to a theme name or path, e.g. theme: pacific`);
+  } else if (typeof config.theme === "object") {
+    const keys = Object.keys(config.theme);
+    if (keys.length === 0) {
+      errors.push(`${configFile}: "theme" map needs exactly one theme name/path key with an overrides map`);
+    }
+    for (const k of keys) {
+      const v = (config.theme as Record<string, any>)[k];
+      if (typeof v !== "object" || v === null || Array.isArray(v)) {
+        errors.push(`${configFile}: theme.${k} must be a map of theme-config overrides (e.g. per_page: 5)`);
+      }
+    }
+    if (keys.length > 1) {
+      errors.push(`${configFile}: "theme" map supports exactly one theme key, got: ${keys.join(", ")}`);
+    }
+  } else if (typeof config.theme !== "string" || !config.theme.trim()) {
+    errors.push(`${configFile}: "theme" must be a theme name/path or a { <name>: { overrides } } map`);
   }
   if (config.baseurl !== undefined && typeof config.baseurl !== "string") {
     errors.push(`${configFile}: "baseurl" must be a string like "/"`);

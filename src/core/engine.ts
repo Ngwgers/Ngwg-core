@@ -57,6 +57,14 @@ export interface EngineState {
 export interface EngineOptions {
   log?: Logger;
   concurrency?: number;
+  /**
+   * fallback plugin declarations used when neither the user config nor the
+   * theme declares a plugin with that key. The CLI hardcodes the official
+   * files/feature URLs here; Core itself knows no default URLs.
+   */
+  defaultPlugins?: Record<string, string>;
+  /** fallback for bare theme names (CLI ensures the official default theme) */
+  defaultTheme?: { name: string; dir: string };
 }
 
 export class Engine {
@@ -67,8 +75,10 @@ export class Engine {
   private pluginContexts = new Map<string, PluginContext>();
   helperMap: Record<string, (...args: any[]) => any> = {};
   private lastError: Error | null = null;
+  private opts: EngineOptions;
 
   constructor(public rootDir: string, opts: EngineOptions = {}) {
+    this.opts = opts;
     this.log = opts.log ?? new Logger();
     this.queue = new EventQueue();
     this.registerSteps();
@@ -181,8 +191,22 @@ export class Engine {
     q.on(Steps.THEME_LOAD, async () => {
       this.assertCurrent(this.interruptToken);
       const config = this.currentConfig!;
-      const themeRoot = await resolveThemeDir(config.theme, this.rootDir);
-      const theme = await loadTheme(themeRoot);
+      // theme may be "pacific", a path, or { pacific: { overrides } }
+      let selector: string;
+      let themeOverrides: Record<string, any> | undefined;
+      if (typeof config.theme === "string") {
+        selector = config.theme;
+      } else {
+        const keys = Object.keys(config.theme);
+        if (keys.length !== 1) {
+          throw new ConfigError(`"theme" map supports exactly one theme key, got: ${keys.join(", ")}`);
+        }
+        selector = keys[0];
+        themeOverrides = config.theme[keys[0]];
+        this.log.debug(`theme overrides applied for "${selector}": ${Object.keys(themeOverrides).join(", ")}`);
+      }
+      const themeRoot = await resolveThemeDir(selector, this.rootDir, this.opts.defaultTheme);
+      const theme = await loadTheme(themeRoot, themeOverrides);
       this.log.info(`theme: ${theme.config.name} (${themeRoot})`);
       this._pendingThemeRoot = themeRoot;
       this._pendingTheme = theme;
@@ -202,6 +226,7 @@ export class Engine {
         log: this.log,
         queue: this.queue,
         makeContext: this.makeContext,
+        defaultPlugins: this.opts.defaultPlugins,
       });
       // keep the helperMap object identity stable: plugin contexts captured
       // it at creation time, so merge instead of reassigning

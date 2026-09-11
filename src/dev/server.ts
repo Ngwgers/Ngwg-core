@@ -59,6 +59,9 @@ export interface DevOptions {
    * over the `dev_speed` field in ngwg.yaml.
    */
   speed?: number;
+  /** fallback plugin/theme sources — see EngineOptions (CLI provides them) */
+  defaultPlugins?: Record<string, string>;
+  defaultTheme?: { name: string; dir: string };
 }
 
 export interface DevHandle {
@@ -69,7 +72,11 @@ export interface DevHandle {
 export async function startDevServer(opts: DevOptions): Promise<DevHandle> {
   const { rootDir } = opts;
   const log = opts.log ?? new Logger();
-  const engine = new Engine(rootDir, { log });
+  const engine = new Engine(rootDir, {
+    log,
+    defaultPlugins: opts.defaultPlugins,
+    defaultTheme: opts.defaultTheme,
+  });
   const clients = new Set<any>();
 
   let busy = false;
