@@ -376,8 +376,13 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
     const optionsValue = surface
       ? {
           self: surface.self,
+          // only plugins that actually publish something appear in shared
           shared: surface.readShared
-            ? Object.fromEntries([...optionSurfaces].filter(([n]) => n !== manifest.name).map(([n, s]) => [n, s.published]))
+            ? Object.fromEntries(
+                [...optionSurfaces]
+                  .filter(([n, s]) => n !== manifest.name && Object.keys(s.published).length > 0)
+                  .map(([n, s]) => [n, s.published]),
+              )
             : {},
         }
       : undefined;
