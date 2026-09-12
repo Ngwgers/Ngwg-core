@@ -137,7 +137,7 @@ export async function cliMain(opts: CliOptions): Promise<void> {
       return;
     }
     case "init":
-      await withExit(() => cmdInit(rootDir, log, opts.themeRepoUrl));
+      await withExit(() => cmdInit(rootDir, log, opts.coreRepoUrl, opts.themeRepoUrl));
       return;
     case "add":
     case "new":
@@ -190,22 +190,27 @@ function extractLogFlags(args: string[]): { rest: string[] } {
   return { rest };
 }
 
-async function cmdInit(root: string, log: Logger, themeRepoUrl?: string): Promise<void> {
+async function cmdInit(root: string, log: Logger, coreRepoUrl?: string, themeRepoUrl?: string): Promise<void> {
   const configPath = path.join(root, "ngwg.yaml");
   if (await exists(configPath)) {
     log.error(`ngwg.yaml already exists at ${configPath}`);
     process.exit(1);
   }
   await ensureDir(path.join(root, "source", "_posts"));
-  // the scaffold declares the default theme's source: `theme` only selects,
-  // the management system fetches themes.<name> into .ngwg/themes/<name> on
-  // first use. The URL is injected by the CLI (Core knows no default theme).
+  // sources are injected by the CLI (Core knows no default repos): the theme
+  // declaration drives the theme fetch into .ngwg/themes/pacific, and the
+  // Ngwg section is where the bootstrap scrapes the core repo URL from —
+  // so a freshly init'd project builds outside the monorepo too.
   const themeSource = themeRepoUrl
     ? `# the theme source is fetched on first use (git clone → .ngwg/themes/pacific)\nthemes:\n  pacific: ${themeRepoUrl}\n`
     : `# declare where the theme comes from, e.g.:\n# themes:\n#   pacific: https://github.com/Ngwgers/Ngwg-default-theme\n`;
+  const ngwgSection =
+    coreRepoUrl || themeRepoUrl
+      ? `# repo sources used by the CLI (core auto-download / ngwg update)\nNgwg:\n${coreRepoUrl ? `  core-repo-url: ${coreRepoUrl}\n` : ""}${themeRepoUrl ? `  theme-repo-url: ${themeRepoUrl}\n` : ""}`
+      : `# Ngwg:\n#   core-repo-url: https://github.com/Ngwgers/Ngwg-core\n`;
   await writeText(
     configPath,
-    `# ngwg configuration\ntitle: My Site\ndescription: 安静的站点\nbaseurl: /\ntheme: pacific\n${themeSource}source_dir: source\npublic_dir: public\n`,
+    `# ngwg configuration\ntitle: My Site\ndescription: 安静的站点\nbaseurl: /\ntheme: pacific\n${themeSource}${ngwgSection}source_dir: source\npublic_dir: public\n`,
   );
   await writeText(
     path.join(root, "source", "_posts", "2026-01-01-hello-world.md"),
