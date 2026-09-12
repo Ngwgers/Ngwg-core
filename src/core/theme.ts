@@ -13,12 +13,14 @@
 // and `{{> partial }}` references never carry an extension.
 
 import * as path from "node:path";
-import { exists, isDir, readBytes, readText, walkFiles } from "../util/fs.ts";
+import { spawnSync } from "node:child_process";
+import { existsSync, renameSync } from "node:fs";
+import { ensureDir, exists, isDir, readBytes, readText, rimraf, walkFiles } from "../util/fs.ts";
 import { trace } from "../util/log.ts";
 import { loadThemeConfig } from "../config/loader.ts";
 import { parseYaml } from "../config/yaml.ts";
 import { normalizeLanguage } from "./i18n.ts";
-import type { ThemeConfig, ThemeObject } from "../types.ts";
+import type { ThemeConfig, ThemeDeclaration, ThemeObject, UserConfig } from "../types.ts";
 
 export class ThemeError extends Error {}
 
@@ -32,9 +34,10 @@ export interface DefaultTheme {
 /**
  * Resolve the configured theme to a directory.
  *  - path containing "/" or starting with "." → relative to project root
- *  - bare name → look in $NGWG_THEMES, ~/.ngwg/themes/<name>, then the
- *    caller-provided fallback (the CLI ensures the official default theme;
- *    Core itself knows no default theme directories).
+ *  - bare name → look in $NGWG_THEMES, <root>/.ngwg/themes/<name>, then
+ *    ~/.ngwg/themes/<name>, then the caller-provided fallback (the CLI
+ *    ensures the official default theme; Core itself knows no default theme
+ *    directories).
  */
 export async function resolveThemeDir(
   theme: string,
@@ -47,6 +50,7 @@ export async function resolveThemeDir(
     candidates.push(path.resolve(rootDir, theme));
   } else {
     if (process.env.NGWG_THEMES) candidates.push(path.join(process.env.NGWG_THEMES, theme));
+    candidates.push(path.join(rootDir, ".ngwg", "themes", theme));
     const home = process.env.HOME;
     if (home) candidates.push(path.join(home, ".ngwg", "themes", theme));
     if (fallback && theme === fallback.name) candidates.push(fallback.dir);
@@ -58,8 +62,84 @@ export async function resolveThemeDir(
   throw new ThemeError(
     `theme "${theme}" not found. Searched:\n  ` +
       candidates.join("\n  ") +
-      `\nSet "theme" in ngwg.yaml to a theme name or a filesystem path.`,
+      `\nSet "theme" in ngwg.yaml to a theme name or a filesystem path, or declare its source under "themes:" (themes.<name>: <url>).`,
   );
+}
+
+/** The URL declared for a theme: `themes.<name>: <url>` or `{ url, options }`. */
+export function declaredThemeUrl(themes: UserConfig["themes"], name: string): string | undefined {
+  const decl = themes?.[name];
+  if (typeof decl === "string") return decl.trim() || undefined;
+  if (decl && typeof decl === "object") return decl.url.trim() || undefined;
+  return undefined;
+}
+
+/** The options declared for a theme (undefined for the plain-URL form). */
+export function declaredThemeOptions(themes: UserConfig["themes"], name: string): Record<string, any> | undefined {
+  const decl = themes?.[name];
+  return decl && typeof decl === "object" ? decl.options : undefined;
+}
+
+/** Expand a `user/repo` shorthand into a full GitHub URL. */
+export function normalizeThemeRepoUrl(url: string): string {
+  return /^[\w.-]+\/[\w.-]+$/.test(url) ? `https://github.com/${url}` : url;
+}
+
+/** Project theme store: <root>/.ngwg/themes/<name>. */
+export function themeStoreDir(rootDir: string, name: string): string {
+  return path.join(rootDir, ".ngwg", "themes", name);
+}
+
+/**
+ * git clone --depth 1 into a temp dir, validate, then move into place — a
+ * failed fetch never leaves a broken or half-installed store copy behind
+ * (an existing invalid copy at dest is replaced; a valid one is kept).
+ */
+export async function cloneIntoStore(
+  url: string,
+  dest: string,
+  validate: (dir: string) => boolean,
+  failHint: string,
+): Promise<void> {
+  const tmp = `${dest}.download`;
+  await rimraf(tmp);
+  await ensureDir(path.dirname(dest));
+  const res = spawnSync("git", ["clone", "--depth", "1", normalizeThemeRepoUrl(url), tmp], { stdio: "pipe" });
+  if (res.status !== 0 || !validate(tmp)) {
+    await rimraf(tmp);
+    throw new ThemeError(
+      `could not fetch theme from ${normalizeThemeRepoUrl(url)} into ${dest}:\n${res.stderr?.toString() || ""}${failHint}`,
+    );
+  }
+  if (existsSync(dest)) await rimraf(dest);
+  renameSync(tmp, dest);
+}
+
+/**
+ * Install a declared theme into the project store (<root>/.ngwg/themes/<name>)
+ * and return its directory. Throws a ThemeError when the name has no
+ * `themes.<name>` declaration — the caller is expected to have tried
+ * resolveThemeDir first.
+ */
+export async function installDeclaredTheme(
+  name: string,
+  rootDir: string,
+  config: UserConfig,
+  log?: { info(msg: string): void },
+): Promise<string> {
+  const url = declaredThemeUrl(config.themes, name);
+  if (!url) throw new ThemeError(
+    `theme "${name}" not found and no source declared for it — add themes.${name}: <repo-url> in ngwg.yaml`,
+  );
+  const store = themeStoreDir(rootDir, name);
+  await cloneIntoStore(
+    url,
+    store,
+    (dir) => existsSync(path.join(dir, "theme.yaml")),
+    `The fetched repository is not a Ngwg theme (missing theme.yaml). Check themes.${name}.url in ngwg.yaml.`,
+  );
+  log?.info(`theme: installed "${name}" → ${store}`);
+  return store;
 }
 
 const DEFAULT_LAYOUTS: Record<string, string> = {

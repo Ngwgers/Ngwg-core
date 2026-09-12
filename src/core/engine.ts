@@ -29,7 +29,7 @@ import {
   type LoadedUnit,
 } from "../plugin/loader.ts";
 import { matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plugin/protocol.ts";
-import { loadTheme, resolveThemeDir, ThemeError } from "./theme.ts";
+import { loadTheme, resolveThemeDir, installDeclaredTheme, declaredThemeOptions, mergeThemeConfig, ThemeError } from "./theme.ts";
 import { normalizeLanguage } from "./i18n.ts";
 import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
@@ -216,7 +216,22 @@ export class Engine {
         themeOverrides = config.theme[keys[0]];
         this.log.debug(`theme overrides applied for "${selector}": ${Object.keys(themeOverrides).join(", ")}`);
       }
-      const themeRoot = await resolveThemeDir(selector, this.rootDir, this.opts.defaultTheme);
+      // resolve the theme directory; a bare name with a `themes.<name>`
+      // declaration is auto-installed into <root>/.ngwg/themes/<name> on
+      // first use (git clone, validated before it replaces anything)
+      let themeRoot: string;
+      try {
+        themeRoot = await resolveThemeDir(selector, this.rootDir, this.opts.defaultTheme);
+      } catch (e) {
+        if (!(e instanceof ThemeError)) throw e;
+        themeRoot = await installDeclaredTheme(selector, this.rootDir, config, this.log);
+      }
+      // declaration options form the base; the user's theme.<name> overrides
+      // section wins on top of them
+      const declOptions = declaredThemeOptions(config.themes, selector);
+      if (declOptions) {
+        themeOverrides = themeOverrides ? mergeThemeConfig(declOptions, themeOverrides) : declOptions;
+      }
       // pass the declared selector so theme errors show what the user wrote
       const theme = await loadTheme(themeRoot, themeOverrides, selector);
       this.log.info(`theme: ${theme.config.name} (${themeRoot})`);

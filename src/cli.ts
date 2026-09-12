@@ -10,8 +10,10 @@
 import { build, startDevServer, Logger, setLogLevel } from "./index.ts";
 import { addCommand, ADD_USAGE } from "./commands/add.ts";
 import { rimraf, ensureDir, writeText, exists } from "./util/fs.ts";
+import { loadUserConfig } from "./config/loader.ts";
+import { themeStoreDir, declaredThemeUrl, cloneIntoStore } from "./core/theme.ts";
 import { spawnSync } from "node:child_process";
-import { renameSync, existsSync } from "node:fs";
+import { renameSync, existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 
 const USAGE = `ngwg — a quiet static site generator
@@ -31,11 +33,14 @@ usage:
   ngwg plugin list
   ngwg plugin remove <name>
   ngwg plugin path
-  ngwg update [core|theme|plugin [name...]]
+  ngwg update [core|theme [name...]|plugin [name...]]
                               update the CLI-managed copies in <root>/.ngwg/
-                              (core, default theme, installed plugins) to the
+                              (core, themes, installed plugins) to the
                               latest version; without a target everything is
-                              updated
+                              updated. 'update core' and 'update theme <name>'
+                              also install when the store copy is missing
+                              (a theme's source comes from themes.<name> in
+                              ngwg.yaml)
   ngwg clean                  remove public/ and the .ngwg/ directory
   ngwg help | version
 
@@ -48,13 +53,21 @@ log levels: default prints the core version, loaded plugins, reload progress
 and errors/warnings; --quiet keeps only errors/warnings; --verbose adds a
 trace of all operations on top of the default output.
 
-the core itself, the default plugins (files, feature) and the default theme
-are fetched automatically into <root>/.ngwg/ on first use. override their
-sources in ngwg.yaml:
+the core itself, the default plugins (files, feature) and themes are fetched
+automatically into <root>/.ngwg/ on first use. themes declared under
+themes.<name> land in <root>/.ngwg/themes/<name> (the theme field only
+selects which one to use); the default theme for bare names without a
+declaration is managed by the CLI. override their sources in ngwg.yaml:
 
   Ngwg:
     core-repo-url: https://github.com/Ngwgers/Ngwg-core
     theme-repo-url: https://github.com/Ngwgers/Ngwg-default-theme
+  themes:
+    pacific: https://github.com/Ngwgers/Ngwg-default-theme
+    other:
+      url: https://github.com/me/my-theme
+      options:               # theme-config overrides applied when selected
+        per_page: 5
   plugins:
     files: https://github.com/Ngwgers/Ngwg-files
     feature: https://github.com/Ngwgers/Ngwg-feature`;
@@ -139,7 +152,16 @@ export async function cliMain(opts: CliOptions): Promise<void> {
       cmdPlugin(args, coreDir, rootDir, log);
       return;
     case "update":
-      await withExit(() => cmdUpdate(args, { coreDir, rootDir, log, coreRepoUrl: opts.coreRepoUrl, themeRepoUrl: opts.themeRepoUrl }));
+      await withExit(() =>
+        cmdUpdate(args, {
+          coreDir,
+          rootDir,
+          log,
+          coreRepoUrl: opts.coreRepoUrl,
+          themeRepoUrl: opts.themeRepoUrl,
+          defaultThemeName: opts.defaultTheme?.name,
+        }),
+      );
       return;
     default:
       log.error(`unknown command '${cmd}'`);
@@ -177,7 +199,7 @@ async function cmdInit(root: string, log: Logger): Promise<void> {
   await ensureDir(path.join(root, "source", "_posts"));
   await writeText(
     configPath,
-    `# ngwg configuration\ntitle: My Site\ndescription: 安静的站点\nbaseurl: /\ntheme: pacific\nsource_dir: source\npublic_dir: public\n`,
+    `# ngwg configuration\ntitle: My Site\ndescription: 安静的站点\nbaseurl: /\ntheme: pacific\n# theme sources: themes.<name> is auto-installed into .ngwg/themes/<name> on first use\n# themes:\n#   pacific: https://github.com/Ngwgers/Ngwg-default-theme\nsource_dir: source\npublic_dir: public\n`,
   );
   await writeText(
     path.join(root, "source", "_posts", "2026-01-01-hello-world.md"),
@@ -225,29 +247,52 @@ function cmdPlugin(args: string[], coreDir: string, root: string, log: Logger): 
 }
 
 /** `ngwg update` — refresh the CLI-managed copies under <root>/.ngwg/.
- * Core and theme stores are re-cloned from the repo URLs the CLI resolved;
- * plugin stores are re-fetched by the management fish script, which knows
- * every declaration flavour (git, tarball, local copy). */
+ * Core and theme stores are re-cloned from their repo URLs (core: the URL
+ * the CLI resolved; themes: the themes.<name> declaration in ngwg.yaml, the
+ * CLI-resolved default theme URL, or the store copy's git origin); plugin
+ * stores are re-fetched by the management fish script, which knows every
+ * declaration flavour (git, tarball, local copy). */
 async function cmdUpdate(
   args: string[],
-  o: { coreDir: string; rootDir: string; log: Logger; coreRepoUrl?: string; themeRepoUrl?: string },
+  o: {
+    coreDir: string;
+    rootDir: string;
+    log: Logger;
+    coreRepoUrl?: string;
+    themeRepoUrl?: string;
+    defaultThemeName?: string;
+  },
 ): Promise<void> {
   const coreValidate = (d: string) => existsSync(path.join(d, "src", "index.ts"));
   const themeValidate = (d: string) => existsSync(path.join(d, "theme.yaml"));
   const target = args[0];
   if (target === undefined) {
+    // bare `update` refreshes what exists — it never installs anything new
     await updateManagedCopy("core", path.join(o.rootDir, ".ngwg", "core"), o.coreRepoUrl, coreValidate, o.log);
     await updateManagedCopy("theme", path.join(o.rootDir, ".ngwg", "theme"), o.themeRepoUrl, themeValidate, o.log);
+    await updateThemes([], o);
     const status = updatePlugins([], o.coreDir, o.rootDir);
     if (status !== 0) process.exit(status);
     return;
   }
   switch (target) {
-    case "core":
-      await updateManagedCopy("core", path.join(o.rootDir, ".ngwg", "core"), o.coreRepoUrl, coreValidate, o.log);
+    case "core": {
+      const store = path.join(o.rootDir, ".ngwg", "core");
+      if (!existsSync(store)) {
+        if (!o.coreRepoUrl) {
+          throw new Error("cannot install core: the CLI did not provide a repo URL for it. Set Ngwg.core-repo-url in ngwg.yaml, then rerun ngwg update.");
+        }
+        await cloneIntoStore(o.coreRepoUrl, store, coreValidate, " The fetched repository is not a Ngwg-core (missing src/index.ts). Check Ngwg.core-repo-url in ngwg.yaml.");
+        o.log.ok(`installed core → ${store}`);
+        o.log.info("it is picked up on the next ngwg run");
+        return;
+      }
+      await updateManagedCopy("core", store, o.coreRepoUrl, coreValidate, o.log);
       return;
+    }
     case "theme":
-      await updateManagedCopy("theme", path.join(o.rootDir, ".ngwg", "theme"), o.themeRepoUrl, themeValidate, o.log);
+    case "themes":
+      await updateThemes(args.slice(1), o);
       return;
     case "plugin":
     case "plugins": {
@@ -257,9 +302,92 @@ async function cmdUpdate(
     }
     default:
       o.log.error(`unknown update target '${target}' (use core, theme or plugin)`);
-      console.log("usage: ngwg update [core|theme|plugin [name...]]");
+      console.log("usage: ngwg update [core|theme [name...]|plugin [name...]]");
       process.exit(2);
   }
+}
+
+/** Update (or, with explicit names, install) CLI-managed theme copies.
+ * With names, each named theme is updated or — when absent from the project
+ * store — installed from its declared source. Without names, every existing
+ * store copy is refreshed: the legacy default-theme store (.ngwg/theme) and
+ * each theme under .ngwg/themes/. */
+async function updateThemes(
+  names: string[],
+  o: { rootDir: string; log: Logger; themeRepoUrl?: string; defaultThemeName?: string },
+): Promise<void> {
+  const themeValidate = (d: string) => existsSync(path.join(d, "theme.yaml"));
+  const themesDir = path.join(o.rootDir, ".ngwg", "themes");
+  const legacyDir = path.join(o.rootDir, ".ngwg", "theme");
+
+  // theme sources may live in ngwg.yaml; update must work without a site too
+  let declared: Record<string, string | { url: string; options?: Record<string, any> }> = {};
+  try {
+    declared = (await loadUserConfig(o.rootDir)).themes ?? {};
+  } catch {
+    // no config file (or unreadable) — fall back to the CLI-provided URL
+  }
+
+  /** source for a store copy: themes.<name> declaration → CLI default-theme
+   * URL → the copy's own git origin */
+  const urlFor = (name: string, storeDir: string): string | undefined =>
+    declaredThemeUrl(declared, name) ??
+    (name === o.defaultThemeName ? o.themeRepoUrl : undefined) ??
+    gitOrigin(storeDir);
+
+  if (names.length > 0) {
+    for (const name of names) {
+      const store = themeStoreDir(o.rootDir, name);
+      const url = urlFor(name, store);
+      if (!url) {
+        throw new Error(
+          `cannot update theme "${name}": no source known. Declare themes.${name}: <repo-url> in ngwg.yaml ` +
+            `(or keep the store copy's git origin), then rerun ngwg update theme ${name}.`,
+        );
+      }
+      if (existsSync(path.join(store, "theme.yaml"))) {
+        await updateManagedCopy(`theme "${name}"`, store, url, themeValidate, o.log);
+      } else {
+        await cloneIntoStore(
+          url,
+          store,
+          themeValidate,
+          ` The fetched repository is not a Ngwg theme (missing theme.yaml). Check themes.${name} in ngwg.yaml.`,
+        );
+        o.log.ok(`installed theme "${name}" → ${store}`);
+      }
+    }
+    return;
+  }
+
+  let updated = 0;
+  if (existsSync(path.join(legacyDir, "theme.yaml"))) {
+    await updateManagedCopy("theme", legacyDir, o.themeRepoUrl, themeValidate, o.log);
+    updated++;
+  }
+  if (existsSync(themesDir)) {
+    for (const entry of readdirSync(themesDir).sort()) {
+      const store = path.join(themesDir, entry);
+      if (!existsSync(path.join(store, "theme.yaml"))) continue;
+      const url = urlFor(entry, store);
+      if (!url) {
+        o.log.warn(
+          `theme "${entry}" has no known source — skipped. Declare themes.${entry}: <repo-url> in ngwg.yaml to make it updatable.`,
+        );
+        continue;
+      }
+      await updateManagedCopy(`theme "${entry}"`, store, url, themeValidate, o.log);
+      updated++;
+    }
+  }
+  if (updated === 0) o.log.info("no CLI-managed themes — nothing to update");
+}
+
+/** The git origin of a store copy, when it has one. */
+function gitOrigin(dir: string): string | undefined {
+  const res = spawnSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8" });
+  const url = res.status === 0 ? res.stdout.trim() : "";
+  return url || undefined;
 }
 
 /** Re-clone a CLI-managed store copy (core/theme) from its repo URL. The
@@ -277,7 +405,10 @@ async function updateManagedCopy(
     return;
   }
   if (!repoUrl) {
-    throw new Error(`cannot update ${name}: the CLI did not provide a repo URL for it. ` + `Set Ngwg.core-repo-url / Ngwg.theme-repo-url in ngwg.yaml, then rerun ngwg update.`);
+    throw new Error(
+      `cannot update ${name}: no source known for it. Set Ngwg.core-repo-url / Ngwg.theme-repo-url or a ` +
+        `themes.<name> declaration in ngwg.yaml, then rerun ngwg update.`,
+    );
   }
   const tmp = `${storeDir}.update`;
   await rimraf(tmp);

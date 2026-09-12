@@ -128,6 +128,13 @@ export interface UserConfig {
    *         post: post
    */
   theme: string | Record<string, Record<string, any>>;
+  /**
+   * theme sources: name → repo URL (or { url, options }). A bare `theme`
+   * name that matches a declaration is auto-installed into
+   * `<root>/.ngwg/themes/<name>` on first use; `options` are deep-merged
+   * onto the theme's own config whenever that theme is selected.
+   */
+  themes?: Record<string, string | ThemeDeclaration>;
   source_dir?: string;
   public_dir?: string;
   /** plugin name -> URL/path — or a declaration object with options */
@@ -147,6 +154,15 @@ export interface UserConfig {
    * weak-network reachability; 0 or negative disables it (default)
    */
   dev_speed?: number;
+}
+
+/**
+ * A theme declaration in `themes.<name>`: where to fetch the theme from and
+ * optional config overrides applied when the theme is selected.
+ */
+export interface ThemeDeclaration {
+  url: string;
+  options?: Record<string, any>;
 }
 
 /**

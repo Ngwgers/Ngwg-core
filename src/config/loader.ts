@@ -108,6 +108,29 @@ export function validateUserConfig(config: UserConfig, configFile: string): stri
   if (config.language !== undefined && (typeof config.language !== "string" || !config.language.trim())) {
     errors.push(`${configFile}: "language" must be a non-empty language tag (e.g. "zh-CN", "en_US")`);
   }
+  if (config.themes !== undefined) {
+    if (typeof config.themes !== "object" || config.themes === null || Array.isArray(config.themes)) {
+      errors.push(`${configFile}: "themes" must be a map of { name: url-or-declaration }`);
+    } else {
+      for (const [k, v] of Object.entries(config.themes)) {
+        if (typeof v === "string") {
+          if (!v.trim()) errors.push(`${configFile}: themes.${k} must be a theme repo URL or path string`);
+        } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+          if (typeof (v as any).url !== "string" || !(v as any).url.trim()) {
+            errors.push(`${configFile}: themes.${k}.url must be a theme repo URL or path string`);
+          }
+          if (
+            (v as any).options !== undefined &&
+            (typeof (v as any).options !== "object" || (v as any).options === null || Array.isArray((v as any).options))
+          ) {
+            errors.push(`${configFile}: themes.${k}.options must be a map of theme-config overrides`);
+          }
+        } else {
+          errors.push(`${configFile}: themes.${k} must be a URL/path string or a { url, options } map`);
+        }
+      }
+    }
+  }
   if (config.dev_speed !== undefined && typeof config.dev_speed !== "number") {
     errors.push(`${configFile}: "dev_speed" must be a number (KB/s; 0 or negative disables throttling)`);
   }
