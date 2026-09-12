@@ -62,6 +62,8 @@ export interface DevOptions {
   /** fallback plugin/theme sources — see EngineOptions (CLI provides them) */
   defaultPlugins?: Record<string, string>;
   defaultTheme?: { name: string; dir: string };
+  /** CLI-owned plugin-management script — see EngineOptions */
+  pluginScript?: string;
 }
 
 export interface DevHandle {
@@ -76,6 +78,7 @@ export async function startDevServer(opts: DevOptions): Promise<DevHandle> {
     log,
     defaultPlugins: opts.defaultPlugins,
     defaultTheme: opts.defaultTheme,
+    pluginScript: opts.pluginScript,
   });
   const clients = new Set<any>();
 

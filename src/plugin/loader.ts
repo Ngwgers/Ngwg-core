@@ -56,14 +56,6 @@ export class PluginLoadError extends Error {
   }
 }
 
-const CORE_ROOT = path.resolve(import.meta.dir, "../..");
-/**
- * Path of the plugin-management fish script. Resolved relative to THIS file
- * so it stays correct no matter where the core itself was loaded from
- * (monorepo checkout, ~/.ngwg or a project's .ngwg/core download).
- */
-export const PLUGIN_SCRIPT = path.join(CORE_ROOT, "scripts", "ngwg-plugins.fish");
-
 export function pluginStoreDir(rootDir: string): string {
   return process.env.NGWG_PLUGIN_DIR || path.join(rootDir, ".ngwg", "plugins");
 }
@@ -86,6 +78,7 @@ export async function resolvePluginDir(
   url: string,
   rootDir: string,
   log: Logger,
+  pluginScript?: string,
 ): Promise<string> {
   const local = localPathFromUrl(url, rootDir);
   if (local) {
@@ -107,17 +100,23 @@ export async function resolvePluginDir(
     return dir;
   }
 
-  log.warn(`plugin "${key}" (${url}) is not installed yet — fetching via ${PLUGIN_SCRIPT}`);
-  installPlugin(rootDir, key, url, log);
+  if (!pluginScript) {
+    throw new PluginLoadError(
+      `plugin "${key}" (${url}) is not installed and no plugin-management script was provided to auto-install it. ` +
+        `Run \`ngwg plugin install ${key} "${url}"\` first (the CLI wires its script into the core).`,
+    );
+  }
+  log.warn(`plugin "${key}" (${url}) is not installed yet — fetching via ${pluginScript}`);
+  installPlugin(rootDir, key, url, log, pluginScript);
   if (await exists(path.join(dir, "ngwg-plugin.yaml"))) return dir;
   throw new PluginLoadError(
     `failed to install plugin "${key}" from ${url}. ` +
-      `Try manually: fish ${PLUGIN_SCRIPT} install ${key} "${url}"`,
+      `Try manually: fish ${pluginScript} install ${key} "${url}"`,
   );
 }
 
-function installPlugin(rootDir: string, key: string, url: string, log: Logger): void {
-  const res = spawnSync("fish", [PLUGIN_SCRIPT, "install", key, url], {
+function installPlugin(rootDir: string, key: string, url: string, log: Logger, script: string): void {
+  const res = spawnSync("fish", [script, "install", key, url], {
     cwd: rootDir,
     encoding: "utf8",
   });
@@ -231,6 +230,12 @@ export interface LoadAllOptions {
    * ships no bundled plugins and knows no default URLs.
    */
   defaultPlugins?: Record<string, string>;
+  /**
+   * path of the plugin-management script (ngwg-plugins.fish), owned by the
+   * CLI and injected via EngineOptions; used only to auto-install missing
+   * remote plugins during a build
+   */
+  pluginScript?: string;
 }
 
 /** A protocol unit together with the manifest name of the module providing it. */
@@ -305,7 +310,7 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
   for (const [key, decl] of Object.entries(declarations)) {
     let pluginRoot: string;
     try {
-      pluginRoot = await resolvePluginDir(key, decl.url, rootDir, log);
+      pluginRoot = await resolvePluginDir(key, decl.url, rootDir, log, opts.pluginScript);
     } catch (e) {
       log.error(`plugin "${key}" could not be resolved: ${(e as Error).message}`);
       throw e;

@@ -67,6 +67,13 @@ export interface EngineOptions {
   defaultPlugins?: Record<string, string>;
   /** fallback for bare theme names (CLI ensures the official default theme) */
   defaultTheme?: { name: string; dir: string };
+  /**
+   * path of the plugin-management script (ngwg-plugins.fish), owned by the
+   * CLI and injected here; used only to auto-install missing remote plugins
+   * during a build. Absent → missing remote plugins fail with install
+   * instructions instead of being fetched.
+   */
+  pluginScript?: string;
 }
 
 export class Engine {
@@ -261,6 +268,7 @@ export class Engine {
         queue: this.queue,
         makeContext: this.makeContext,
         defaultPlugins: this.opts.defaultPlugins,
+        pluginScript: this.opts.pluginScript,
       });
       // keep the helperMap object identity stable: plugin contexts captured
       // it at creation time, so merge instead of reassigning

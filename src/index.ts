@@ -40,7 +40,21 @@ export {
   findConfigFile,
   ConfigError,
 } from "./config/loader.ts";
-export { resolveThemeDir, loadTheme, ThemeError } from "./core/theme.ts";
+// theme management (store layout + declared-source resolution) — used by the
+// CLI's update/install commands through this public surface only
+export {
+  resolveThemeDir,
+  loadTheme,
+  ThemeError,
+  themeStoreDir,
+  declaredThemeUrl,
+  declaredThemeLocalDir,
+  declaredThemeOptions,
+  isLocalThemeUrl,
+  resolveDeclaredTheme,
+  cloneIntoStore,
+  normalizeThemeRepoUrl,
+} from "./core/theme.ts";
 export { buildSiteData, parseDate } from "./core/data.ts";
 export { buildRenderTasks, slugify } from "./core/tasks.ts";
 export { startDevServer } from "./dev/server.ts";
