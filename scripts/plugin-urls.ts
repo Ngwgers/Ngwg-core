@@ -25,13 +25,24 @@ if (!root) {
     }
   // theme may be a string or a { <name-or-path>: { overrides } } map
   const theme = typeof cfg?.theme === "object" && cfg?.theme !== null ? Object.keys(cfg.theme)[0] : cfg?.theme;
-  // resolve theme.yaml to read its plugin declarations too; the CLI exports
-  // NGWG_DEFAULT_THEME (the ensured official default theme) — it only counts
-  // when its manifest name actually matches the configured theme
+  // resolve theme.yaml to read its plugin declarations too. Candidates mirror
+  // the core's theme resolution: explicit path, a local themes.<name>
+  // declaration, the stores, and the CLI-injected NGWG_DEFAULT_THEME (which
+  // only counts when its manifest name actually matches the theme)
   const candidates: string[] = [];
+  const declaredUrl = (() => {
+    const decl = (cfg?.themes as any)?.[theme];
+    if (typeof decl === "string") return decl.trim();
+    if (decl && typeof decl === "object") return String(decl?.url ?? "").trim();
+    return "";
+  })();
+  if (declaredUrl && /^(file:\/\/|\/|\.\/|\.\.\/)/.test(declaredUrl)) {
+    candidates.push(path.resolve(root, declaredUrl.replace(/^file:\/\//, "")));
+  }
   if (typeof theme === "string") {
     if (theme.includes("/") || theme.startsWith(".")) candidates.push(path.resolve(root, theme));
     if (process.env.NGWG_THEMES) candidates.push(path.join(process.env.NGWG_THEMES, theme));
+    candidates.push(path.join(root, ".ngwg", "themes", theme));
     if (process.env.HOME) candidates.push(path.join(process.env.HOME, ".ngwg", "themes", theme));
     const fallback = process.env.NGWG_DEFAULT_THEME;
     if (fallback && existsSync(path.join(fallback, "theme.yaml"))) {

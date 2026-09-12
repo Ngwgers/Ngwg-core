@@ -29,7 +29,7 @@ import {
   type LoadedUnit,
 } from "../plugin/loader.ts";
 import { matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plugin/protocol.ts";
-import { loadTheme, resolveThemeDir, installDeclaredTheme, declaredThemeOptions, mergeThemeConfig, ThemeError } from "./theme.ts";
+import { loadTheme, resolveThemeDir, resolveDeclaredTheme, declaredThemeLocalDir, declaredThemeOptions, mergeThemeConfig, ThemeError } from "./theme.ts";
 import { normalizeLanguage } from "./i18n.ts";
 import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
@@ -216,15 +216,22 @@ export class Engine {
         themeOverrides = config.theme[keys[0]];
         this.log.debug(`theme overrides applied for "${selector}": ${Object.keys(themeOverrides).join(", ")}`);
       }
-      // resolve the theme directory; a bare name with a `themes.<name>`
-      // declaration is auto-installed into <root>/.ngwg/themes/<name> on
-      // first use (git clone, validated before it replaces anything)
+      // resolve the theme directory. A local-path declaration is used
+      // directly (live checkout, never shadowed by a store copy); a bare
+      // name with a remote `themes.<name>` declaration is auto-installed
+      // into <root>/.ngwg/themes/<name> on first use (git clone, validated
+      // in a temp dir before it lands)
       let themeRoot: string;
-      try {
-        themeRoot = await resolveThemeDir(selector, this.rootDir, this.opts.defaultTheme);
-      } catch (e) {
-        if (!(e instanceof ThemeError)) throw e;
-        themeRoot = await installDeclaredTheme(selector, this.rootDir, config, this.log);
+      const localDecl = await declaredThemeLocalDir(selector, this.rootDir, config.themes);
+      if (localDecl) {
+        themeRoot = localDecl;
+      } else {
+        try {
+          themeRoot = await resolveThemeDir(selector, this.rootDir, this.opts.defaultTheme);
+        } catch (e) {
+          if (!(e instanceof ThemeError)) throw e;
+          themeRoot = await resolveDeclaredTheme(selector, this.rootDir, config, this.log);
+        }
       }
       // declaration options form the base; the user's theme.<name> overrides
       // section wins on top of them

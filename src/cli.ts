@@ -11,7 +11,7 @@ import { build, startDevServer, Logger, setLogLevel } from "./index.ts";
 import { addCommand, ADD_USAGE } from "./commands/add.ts";
 import { rimraf, ensureDir, writeText, exists } from "./util/fs.ts";
 import { loadUserConfig } from "./config/loader.ts";
-import { themeStoreDir, declaredThemeUrl, cloneIntoStore } from "./core/theme.ts";
+import { themeStoreDir, declaredThemeUrl, declaredThemeLocalDir, isLocalThemeUrl, cloneIntoStore } from "./core/theme.ts";
 import { spawnSync } from "node:child_process";
 import { renameSync, existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
@@ -137,7 +137,7 @@ export async function cliMain(opts: CliOptions): Promise<void> {
       return;
     }
     case "init":
-      await withExit(() => cmdInit(rootDir, log));
+      await withExit(() => cmdInit(rootDir, log, opts.themeRepoUrl));
       return;
     case "add":
     case "new":
@@ -190,23 +190,29 @@ function extractLogFlags(args: string[]): { rest: string[] } {
   return { rest };
 }
 
-async function cmdInit(root: string, log: Logger): Promise<void> {
+async function cmdInit(root: string, log: Logger, themeRepoUrl?: string): Promise<void> {
   const configPath = path.join(root, "ngwg.yaml");
   if (await exists(configPath)) {
     log.error(`ngwg.yaml already exists at ${configPath}`);
     process.exit(1);
   }
   await ensureDir(path.join(root, "source", "_posts"));
+  // the scaffold declares the default theme's source: `theme` only selects,
+  // the management system fetches themes.<name> into .ngwg/themes/<name> on
+  // first use. The URL is injected by the CLI (Core knows no default theme).
+  const themeSource = themeRepoUrl
+    ? `# the theme source is fetched on first use (git clone → .ngwg/themes/pacific)\nthemes:\n  pacific: ${themeRepoUrl}\n`
+    : `# declare where the theme comes from, e.g.:\n# themes:\n#   pacific: https://github.com/Ngwgers/Ngwg-default-theme\n`;
   await writeText(
     configPath,
-    `# ngwg configuration\ntitle: My Site\ndescription: 安静的站点\nbaseurl: /\ntheme: pacific\n# theme sources: themes.<name> is auto-installed into .ngwg/themes/<name> on first use\n# themes:\n#   pacific: https://github.com/Ngwgers/Ngwg-default-theme\nsource_dir: source\npublic_dir: public\n`,
+    `# ngwg configuration\ntitle: My Site\ndescription: 安静的站点\nbaseurl: /\ntheme: pacific\n${themeSource}source_dir: source\npublic_dir: public\n`,
   );
   await writeText(
     path.join(root, "source", "_posts", "2026-01-01-hello-world.md"),
     `---\ntitle: 你好，世界\ndate: 2026-01-01\ntags:\n  - 随笔\ncategories: 开始\n---\n\n# 你好，世界\n\n这是第一篇文章。风从海面吹过来。\n`,
   );
   log.ok(`scaffolded ngwg.yaml and source/_posts in ${root}`);
-  log.info("run `ngwg build` to generate public/");
+  log.info("run `ngwg build` to generate public/ (the theme is fetched automatically on first use)");
 }
 
 async function cmdClean(root: string, log: Logger): Promise<void> {
@@ -345,6 +351,12 @@ async function updateThemes(
             `(or keep the store copy's git origin), then rerun ngwg update theme ${name}.`,
         );
       }
+      // a local-path declaration is used directly (no store copy) — there is
+      // nothing to fetch; the checkout is edited in place
+      if (isLocalThemeUrl(url) && (await declaredThemeLocalDir(name, o.rootDir, declared))) {
+        o.log.info(`theme "${name}" is declared as a local path (${url}) — used directly, nothing to fetch`);
+        continue;
+      }
       if (existsSync(path.join(store, "theme.yaml"))) {
         await updateManagedCopy(`theme "${name}"`, store, url, themeValidate, o.log);
       } else {
@@ -374,6 +386,12 @@ async function updateThemes(
         o.log.warn(
           `theme "${entry}" has no known source — skipped. Declare themes.${entry}: <repo-url> in ngwg.yaml to make it updatable.`,
         );
+        continue;
+      }
+      // local-path declarations resolve directly to the checkout; a store
+      // copy (e.g. left over from an earlier remote declaration) is unused
+      if (isLocalThemeUrl(url)) {
+        o.log.info(`theme "${entry}" is declared as a local path (${url}) — used directly, nothing to fetch`);
         continue;
       }
       await updateManagedCopy(`theme "${entry}"`, store, url, themeValidate, o.log);

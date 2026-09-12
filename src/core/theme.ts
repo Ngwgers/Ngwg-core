@@ -74,6 +74,33 @@ export function declaredThemeUrl(themes: UserConfig["themes"], name: string): st
   return undefined;
 }
 
+/**
+ * True for declarations that point at a local directory and are used
+ * DIRECTLY (no store copy, dev checkouts stay live) — bare paths only.
+ * `file://` URLs are URLs: like the plugin system's file:// flavour, they
+ * are fetched into the store.
+ */
+export function isLocalThemeUrl(url: string): boolean {
+  return url.startsWith("/") || url.startsWith("./") || url.startsWith("../");
+}
+
+/**
+ * The local directory a theme declaration points at, when it is a bare
+ * local path (resolved against the project root). Direct-use declarations
+ * take precedence over the store so a stale copy can never shadow the
+ * declared source.
+ */
+export async function declaredThemeLocalDir(
+  name: string,
+  rootDir: string,
+  themes: UserConfig["themes"],
+): Promise<string | undefined> {
+  const url = declaredThemeUrl(themes, name);
+  if (!url || !isLocalThemeUrl(url)) return undefined;
+  const p = path.resolve(rootDir, url);
+  return (await isDir(p)) ? p : undefined;
+}
+
 /** The options declared for a theme (undefined for the plain-URL form). */
 export function declaredThemeOptions(themes: UserConfig["themes"], name: string): Record<string, any> | undefined {
   const decl = themes?.[name];
@@ -116,12 +143,13 @@ export async function cloneIntoStore(
 }
 
 /**
- * Install a declared theme into the project store (<root>/.ngwg/themes/<name>)
- * and return its directory. Throws a ThemeError when the name has no
+ * Resolve a declared theme source: a local path is used directly (live, no
+ * store copy); a remote URL is cloned into the project store
+ * (<root>/.ngwg/themes/<name>). Throws a ThemeError when the name has no
  * `themes.<name>` declaration — the caller is expected to have tried
  * resolveThemeDir first.
  */
-export async function installDeclaredTheme(
+export async function resolveDeclaredTheme(
   name: string,
   rootDir: string,
   config: UserConfig,
@@ -131,6 +159,14 @@ export async function installDeclaredTheme(
   if (!url) throw new ThemeError(
     `theme "${name}" not found and no source declared for it — add themes.${name}: <repo-url> in ngwg.yaml`,
   );
+  const local = await declaredThemeLocalDir(name, rootDir, config.themes);
+  if (local) return local;
+  if (isLocalThemeUrl(url)) {
+    throw new ThemeError(
+      `theme "${name}" is declared at "${url}" (themes.${name}) but that directory does not exist. ` +
+        `Fix the path in ngwg.yaml.`,
+    );
+  }
   const store = themeStoreDir(rootDir, name);
   await cloneIntoStore(
     url,
