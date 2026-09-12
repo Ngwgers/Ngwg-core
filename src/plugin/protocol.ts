@@ -1,14 +1,20 @@
 // Plugin protocol definitions and runtime validation.
 //
-// Like Wayland, an Ngwg plugin implements a *subset* of the available
-// protocols and Core discovers at load time which ones it speaks. A plugin
-// may implement just one protocol (e.g. only ngwg-helper-v1) and nothing else.
+// A plugin module's default export is an object with any subset of three
+// *arrays* — `parsers`, `deployers`, `helpers`. Each element is an
+// independent, self-contained unit (e.g. a markdown parser or an HTML
+// deployer) that declares which files/tasks it handles:
 //
-// A plugin module's default export may be:
-//   - a single protocol object, or
-//   - an array of protocol objects (one plugin can ship several), or
-//   - { plugins: [...] } (explicit form)
-// plus optional `onLoad(ctx)` / `onUnload()` lifecycle hooks on any object.
+//   export default {
+//     parsers:  [markdownParser],          // → ngwg-parser-v1
+//     deployers: [templateDeployer],       // → ngwg-deployer-v1
+//     helpers:  [featureHelpers],          // → ngwg-helper-v1
+//     onLoad(ctx) { … }, onUnload() { … },
+//   };
+//
+// The array a unit appears in determines its protocol; units carry no
+// `protocol` field themselves. Core discovers at load time which protocols
+// a module speaks — a plugin exporting only `helpers` is fully legal.
 
 import type {
   DeployEnv,
@@ -23,26 +29,53 @@ export const HELPER_PROTOCOL = "ngwg-helper-v1";
 
 export const KNOWN_PROTOCOLS = [PARSER_PROTOCOL, DEPLOYER_PROTOCOL, HELPER_PROTOCOL] as const;
 
-export interface ParserPluginV1 {
-  protocol: typeof PARSER_PROTOCOL;
+/**
+ * Built-in file types a parser unit can claim by name. A type is just a
+ * named bundle of extensions; "按文件类型或文件后缀" — units may match by
+ * either (or both; the match is the union of both sets).
+ */
+export const FILE_TYPES: Record<string, string[]> = {
+  markdown: [".md", ".markdown"],
+  html: [".html", ".htm"],
+  text: [".txt", ".text"],
+  json: [".json"],
+  yaml: [".yaml", ".yml"],
+  css: [".css"],
+  image: [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".avif"],
+};
+
+/**
+ * The two kinds of render tasks a deployer unit can claim: "page" tasks
+ * render a theme layout, "asset" tasks copy bytes verbatim.
+ */
+export const TASK_TYPES = ["page", "asset"] as const;
+export type TaskTypeV1 = (typeof TASK_TYPES)[number];
+
+export interface ParserUnitV1 {
+  /** unit name, e.g. "ngwg-markdown-parser" (used in logs and errors) */
   name: string;
   version: string;
-  /** file extensions this parser handles, lowercase with dot, e.g. [".md"] */
-  extensions: string[];
-  /** convert one file into a SourceObject (or null to skip it) */
+  /** file extensions handled, lowercase with dot, e.g. [".md", ".markdown"] */
+  extensions?: string[];
+  /** file types handled, keys of FILE_TYPES, e.g. ["markdown"] */
+  types?: string[];
+  /** convert one matched file into a SourceObject (or null to skip it) */
   parseFile(ctx: PluginContext, filePath: string, content: Uint8Array): Promise<SourceObject | null> | SourceObject | null;
 }
 
-export interface DeployerPluginV1 {
-  protocol: typeof DEPLOYER_PROTOCOL;
+export interface DeployerUnitV1 {
+  /** unit name, e.g. "ngwg-template-deployer" (used in logs and errors) */
   name: string;
   version: string;
-  /** render every task and write results into env.publicDir */
+  /** output extensions handled, lowercase with dot, e.g. [".html"] */
+  extensions?: string[];
+  /** task kinds handled: "page" (layout render) and/or "asset" (verbatim copy) */
+  types?: TaskTypeV1[];
+  /** write the matched tasks into env.publicDir */
   deploy(ctx: PluginContext, env: DeployEnv, tasks: RenderTask[]): Promise<void> | void;
 }
 
-export interface HelperPluginV1 {
-  protocol: typeof HELPER_PROTOCOL;
+export interface HelperUnitV1 {
   name: string;
   version: string;
   /** functions exposed to themes as `h.<name>` inside templates */
@@ -50,17 +83,19 @@ export interface HelperPluginV1 {
   /** optional: contribute extra data to site.data during pipeline step 7 */
   buildData?(ctx: PluginContext, site: any, sources: SourceObject[]): Promise<Record<string, any>> | Record<string, any>;
   /**
-   * optional: called once after the primary deployer wrote public/ — lets a
-   * helper plugin generate extra artifacts (e.g. sitemap.xml, rss.xml).
-   * Writing outside env.publicDir is a protocol violation.
+   * optional: called once after all deployers wrote public/ — lets a helper
+   * unit generate extra artifacts (e.g. sitemap.xml, rss.xml). Writing
+   * outside env.publicDir is a protocol violation.
    */
   afterDeploy?(ctx: PluginContext, env: DeployEnv): Promise<void> | void;
 }
 
-export type ProtocolObject = ParserPluginV1 | DeployerPluginV1 | HelperPluginV1;
+export type ProtocolUnit = ParserUnitV1 | DeployerUnitV1 | HelperUnitV1;
 
 export interface PluginModule {
-  plugins?: ProtocolObject[];
+  parsers?: ParserUnitV1[];
+  deployers?: DeployerUnitV1[];
+  helpers?: HelperUnitV1[];
   onLoad?(ctx: PluginContext): void | Promise<void>;
   onUnload?(): void | Promise<void>;
 }
@@ -69,94 +104,154 @@ export interface PluginLoadResult {
   ok: boolean;
   /** which protocols the module implements (empty when invalid) */
   protocols: string[];
-  pluginNames: string[];
+  unitNames: string[];
   errors: string[];
   module?: PluginModule;
-  objects: ProtocolObject[];
+  parsers: ParserUnitV1[];
+  deployers: DeployerUnitV1[];
+  helpers: HelperUnitV1[];
 }
 
 function isObject(v: any): v is Record<string, any> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function validateProtocolObject(obj: any, label: string, errors: string[]): ProtocolObject | null {
-  if (!isObject(obj)) {
-    errors.push(`${label}: expected an object, got ${typeof obj}`);
-    return null;
-  }
-  const proto = obj.protocol;
-  const name = obj.name;
-  const version = obj.version;
-  if (typeof name !== "string" || !name) errors.push(`${label}: missing "name"`);
-  if (typeof version !== "string" || !version) errors.push(`${label}: missing "version"`);
+function isUnitList(v: any): boolean {
+  return v === undefined || (Array.isArray(v) && v.every((e) => isObject(e)));
+}
 
-  switch (proto) {
-    case PARSER_PROTOCOL: {
-      if (!Array.isArray(obj.extensions) || obj.extensions.length === 0 || obj.extensions.some((e: any) => typeof e !== "string" || !e.startsWith("."))) {
-        errors.push(`${label}: parser plugin must declare a non-empty "extensions" array of dot-prefixed strings`);
-      }
-      if (typeof obj.parseFile !== "function") {
-        errors.push(`${label}: parser plugin must implement parseFile(ctx, filePath, content)`);
-      }
-      break;
-    }
-    case DEPLOYER_PROTOCOL: {
-      if (typeof obj.deploy !== "function") {
-        errors.push(`${label}: deployer plugin must implement deploy(ctx, env, tasks)`);
-      }
-      break;
-    }
-    case HELPER_PROTOCOL: {
-      if (!isObject(obj.helpers)) {
-        errors.push(`${label}: helper plugin must provide a "helpers" object of functions`);
-      } else {
-        for (const [k, fn] of Object.entries(obj.helpers)) {
-          if (typeof fn !== "function") errors.push(`${label}: helper "${k}" is not a function`);
-        }
-      }
-      if (obj.afterDeploy !== undefined && typeof obj.afterDeploy !== "function") {
-        errors.push(`${label}: helper plugin "afterDeploy" must be a function when provided`);
-      }
-      break;
-    }
-    default:
-      errors.push(
-        `${label}: unknown protocol ${JSON.stringify(proto)}; known protocols: ${KNOWN_PROTOCOLS.join(", ")}`,
-      );
-      return null;
+/** Expand a unit's `types` + `extensions` into one lowercase extension set. */
+export function matchExtensions(extensions?: string[], types?: string[], registry: Record<string, string[]> = FILE_TYPES): Set<string> {
+  const set = new Set<string>();
+  for (const e of extensions ?? []) set.add(e.toLowerCase());
+  for (const t of types ?? []) for (const e of registry[t] ?? []) set.add(e.toLowerCase());
+  return set;
+}
+
+function validateExtensions(list: any, label: string, errors: string[]): boolean {
+  if (!Array.isArray(list) || list.some((e: any) => typeof e !== "string" || !e.startsWith("."))) {
+    errors.push(`${label}: "extensions" must be an array of dot-prefixed strings (e.g. [".md"])`);
+    return false;
   }
-  return obj as ProtocolObject;
+  return true;
+}
+
+function validateParserUnit(unit: any, label: string, errors: string[]): void {
+  const hasExt = Array.isArray(unit.extensions) && unit.extensions.length > 0;
+  const hasTypes = Array.isArray(unit.types) && unit.types.length > 0;
+  if (!hasExt && !hasTypes) {
+    errors.push(`${label}: parser unit must declare what it handles — a non-empty "extensions" array of dot-prefixed strings and/or a non-empty "types" array of file types (${Object.keys(FILE_TYPES).join(", ")})`);
+  }
+  if (unit.extensions !== undefined && !validateExtensions(unit.extensions, label, errors)) return;
+  if (unit.types !== undefined) {
+    for (const t of unit.types) {
+      if (!FILE_TYPES[t]) {
+        errors.push(`${label}: unknown file type ${JSON.stringify(t)}; known types: ${Object.keys(FILE_TYPES).join(", ")}`);
+      }
+    }
+  }
+  if (typeof unit.parseFile !== "function") {
+    errors.push(`${label}: parser unit must implement parseFile(ctx, filePath, content)`);
+  }
+}
+
+function validateDeployerUnit(unit: any, label: string, errors: string[]): void {
+  const hasExt = Array.isArray(unit.extensions) && unit.extensions.length > 0;
+  const hasTypes = Array.isArray(unit.types) && unit.types.length > 0;
+  if (!hasExt && !hasTypes) {
+    errors.push(`${label}: deployer unit must declare what it handles — a non-empty "types" array of task kinds (${TASK_TYPES.join(", ")}) and/or a non-empty "extensions" array of output extensions`);
+  }
+  if (unit.extensions !== undefined && !validateExtensions(unit.extensions, label, errors)) return;
+  if (unit.types !== undefined) {
+    for (const t of unit.types) {
+      if (!TASK_TYPES.includes(t)) {
+        errors.push(`${label}: unknown task kind ${JSON.stringify(t)}; known kinds: ${TASK_TYPES.join(", ")}`);
+      }
+    }
+  }
+  if (typeof unit.deploy !== "function") {
+    errors.push(`${label}: deployer unit must implement deploy(ctx, env, tasks)`);
+  }
+}
+
+function validateHelperUnit(unit: any, label: string, errors: string[]): void {
+  if (!isObject(unit.helpers)) {
+    errors.push(`${label}: helper unit must provide a "helpers" object of functions`);
+  } else {
+    for (const [k, fn] of Object.entries(unit.helpers)) {
+      if (typeof fn !== "function") errors.push(`${label}: helper "${k}" is not a function`);
+    }
+  }
+  if (unit.afterDeploy !== undefined && typeof unit.afterDeploy !== "function") {
+    errors.push(`${label}: helper unit "afterDeploy" must be a function when provided`);
+  }
 }
 
 /**
  * Runtime-validate an imported plugin module. Returns everything Core needs
  * to decide whether the plugin can be used and which protocols it speaks.
- * A plugin implementing no known protocol is a load failure.
+ * A module exporting none of the arrays is a load failure.
  */
 export function validatePluginModule(mod: any, label: string): PluginLoadResult {
   const errors: string[] = [];
-  const objects: ProtocolObject[] = [];
-  let candidates: any[];
+  const parsers: ParserUnitV1[] = [];
+  const deployers: DeployerUnitV1[] = [];
+  const helpers: HelperUnitV1[] = [];
 
-  if (Array.isArray(mod)) candidates = mod;
-  else if (isObject(mod) && Array.isArray(mod.plugins)) candidates = mod.plugins;
-  else candidates = [mod];
-
-  for (let i = 0; i < candidates.length; i++) {
-    const validated = validateProtocolObject(candidates[i], `${label}[${i}]`, errors);
-    if (validated) objects.push(validated);
+  if (!isObject(mod)) {
+    errors.push(
+      `${label}: expected an object exporting { parsers, deployers, helpers } unit arrays (ngwg-*-v1), got ${Array.isArray(mod) ? "an array" : typeof mod}`,
+    );
+  } else {
+    for (const key of ["parsers", "deployers", "helpers"] as const) {
+      if (!isUnitList(mod[key])) {
+        errors.push(`${label}: "${key}" must be an array of unit objects (or omitted)`);
+      }
+    }
+    if (errors.length === 0) {
+      (mod.parsers ?? []).forEach((unit: any, i: number) => {
+        if (typeof unit?.name !== "string" || !unit.name) errors.push(`${label}[parsers][${i}]: missing "name"`);
+        if (typeof unit?.version !== "string" || !unit.version) errors.push(`${label}[parsers][${i}]: missing "version"`);
+        const before = errors.length;
+        validateParserUnit(unit, `${label}[parsers][${i}]`, errors);
+        if (errors.length === before) parsers.push(unit);
+      });
+      (mod.deployers ?? []).forEach((unit: any, i: number) => {
+        if (typeof unit?.name !== "string" || !unit.name) errors.push(`${label}[deployers][${i}]: missing "name"`);
+        if (typeof unit?.version !== "string" || !unit.version) errors.push(`${label}[deployers][${i}]: missing "version"`);
+        const before = errors.length;
+        validateDeployerUnit(unit, `${label}[deployers][${i}]`, errors);
+        if (errors.length === before) deployers.push(unit);
+      });
+      (mod.helpers ?? []).forEach((unit: any, i: number) => {
+        if (typeof unit?.name !== "string" || !unit.name) errors.push(`${label}[helpers][${i}]: missing "name"`);
+        if (typeof unit?.version !== "string" || !unit.version) errors.push(`${label}[helpers][${i}]: missing "version"`);
+        const before = errors.length;
+        validateHelperUnit(unit, `${label}[helpers][${i}]`, errors);
+        if (errors.length === before) helpers.push(unit);
+      });
+    }
   }
 
-  if (objects.length === 0 && errors.length === 0) {
-    errors.push(`${label}: module implements none of the known protocols (${KNOWN_PROTOCOLS.join(", ")})`);
+  if (parsers.length === 0 && deployers.length === 0 && helpers.length === 0 && errors.length === 0) {
+    errors.push(
+      `${label}: module implements none of the known protocols (${KNOWN_PROTOCOLS.join(", ")}) — export a non-empty parsers/deployers/helpers array`,
+    );
   }
+
+  const protocols: string[] = [];
+  if (parsers.length > 0) protocols.push(PARSER_PROTOCOL);
+  if (deployers.length > 0) protocols.push(DEPLOYER_PROTOCOL);
+  if (helpers.length > 0) protocols.push(HELPER_PROTOCOL);
 
   return {
-    ok: errors.length === 0 && objects.length > 0,
-    protocols: [...new Set(objects.map((o) => o.protocol))],
-    pluginNames: [...new Set(objects.map((o) => o.name))],
+    ok: errors.length === 0 && protocols.length > 0,
+    protocols,
+    unitNames: [...parsers, ...deployers, ...helpers].map((u) => u.name),
     errors,
     module: isObject(mod) ? (mod as PluginModule) : undefined,
-    objects,
+    parsers,
+    deployers,
+    helpers,
   };
 }

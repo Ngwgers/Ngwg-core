@@ -15,16 +15,20 @@ export {
   DEPLOYER_PROTOCOL,
   HELPER_PROTOCOL,
   KNOWN_PROTOCOLS,
+  FILE_TYPES,
+  TASK_TYPES,
+  matchExtensions,
   validatePluginModule,
 } from "./plugin/protocol.ts";
 export type {
-  ParserPluginV1,
-  DeployerPluginV1,
-  HelperPluginV1,
+  ParserUnitV1,
+  DeployerUnitV1,
+  HelperUnitV1,
+  TaskTypeV1,
   PluginModule,
-  ProtocolObject,
+  ProtocolUnit,
 } from "./plugin/protocol.ts";
-export { loadAllPlugins, readManifest, resolvePluginDir, pluginStoreDir, PluginLoadError } from "./plugin/loader.ts";
+export { loadAllPlugins, readManifest, resolvePluginDir, pluginStoreDir, PluginLoadError, type LoadedUnit } from "./plugin/loader.ts";
 export { Engine, CORE_VERSION, RunInterrupted } from "./core/engine.ts";
 export { parseYaml, splitFrontmatter } from "./config/yaml.ts";
 export {

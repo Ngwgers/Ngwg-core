@@ -2,7 +2,7 @@
 // structured SiteData: sorted posts, tag/category indexes, archive groups and
 // prev/next links. Helper plugins can contribute extra data via buildData().
 
-import type { HelperPluginV1 } from "../plugin/protocol.ts";
+import type { HelperUnitV1 } from "../plugin/protocol.ts";
 import type { PluginContext, SiteData, SourceObject, UserConfig } from "../types.ts";
 import { slugify } from "./tasks.ts";
 
@@ -32,7 +32,7 @@ function toStringArray(v: any): string[] {
 export function buildSiteData(
   config: UserConfig,
   sources: Map<string, SourceObject>,
-  helperPlugins: HelperPluginV1[],
+  helperPlugins: HelperUnitV1[],
   contexts: Map<string, PluginContext>,
 ): SiteData {
   const all = [...sources.values()];

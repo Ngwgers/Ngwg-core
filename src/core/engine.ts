@@ -26,12 +26,13 @@ import { parseYaml } from "../config/yaml.ts";
 import {
   loadAllPlugins,
   type LoadAllResult,
+  type LoadedUnit,
 } from "../plugin/loader.ts";
-import type { DeployerPluginV1, ParserPluginV1 } from "../plugin/protocol.ts";
+import { matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plugin/protocol.ts";
 import { loadTheme, resolveThemeDir, ThemeError } from "./theme.ts";
 import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
-import type { DeployEnv, PluginContext, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
+import type { DeployEnv, PluginContext, RenderTask, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
 
 export const CORE_VERSION = "0.1.0";
 
@@ -306,9 +307,16 @@ export class Engine {
   // Source parsing (step 6)
   // -------------------------------------------------------------------------
 
-  private findParser(parsers: ParserPluginV1[], ext: string): ParserPluginV1 | null {
+  /**
+   * Resolve the parser unit that handles a file extension: the first unit
+   * (in plugin load order) whose declared extensions/types cover it wins.
+   */
+  private findParser(
+    parsers: LoadedUnit<ParserUnitV1>[],
+    ext: string,
+  ): LoadedUnit<ParserUnitV1> | null {
     for (const p of parsers) {
-      if (p.extensions.map((e) => e.toLowerCase()).includes(ext)) return p;
+      if (matchExtensions(p.unit.extensions, p.unit.types).has(ext)) return p;
     }
     return null;
   }
@@ -316,7 +324,7 @@ export class Engine {
   private async parseAllSources(
     config: UserConfig,
     sourceDir: string,
-    parsers: ParserPluginV1[],
+    parsers: LoadedUnit<ParserUnitV1>[],
   ): Promise<Map<string, SourceObject>> {
     const sources = new Map<string, SourceObject>();
     if (!(await isDir(sourceDir))) {
@@ -328,11 +336,11 @@ export class Engine {
     await pool.run(files, async (rel) => {
       const abs = path.join(sourceDir, rel);
       const ext = extOf(rel);
-      const parser = this.findParser(parsers, ext);
+      const entry = this.findParser(parsers, ext);
       let obj: SourceObject | null;
-      if (parser) {
-        this.log.debug(`parse ${rel} via ${parser.name}`);
-        obj = await parser.parseFile(this.pluginContexts.get(parser.name) ?? this.systemContext(), abs, await readBytes(abs));
+      if (entry) {
+        this.log.debug(`parse ${rel} via ${entry.unit.name}`);
+        obj = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), abs, await readBytes(abs));
       } else {
         this.log.debug(`asset ${rel} (no parser for ${ext || "raw file"})`);
         obj = this.assetObject(sourceDir, abs, rel);
@@ -342,7 +350,7 @@ export class Engine {
     return sources;
   }
 
-  private async reparseSources(sourceDir: string, parsers: ParserPluginV1[], changed: string[]) {
+  private async reparseSources(sourceDir: string, parsers: LoadedUnit<ParserUnitV1>[], changed: string[]) {
     if (!this.state) return;
     for (const file of changed) {
       if (path.dirname(file) === this.rootDir || file === this.state.configFile) continue;
@@ -354,10 +362,10 @@ export class Engine {
         continue;
       }
       const rel = path.relative(sourceDir, file);
-      const parser = this.findParser(parsers, extOf(file));
+      const entry = this.findParser(parsers, extOf(file));
       let obj: SourceObject | null;
-      if (parser) {
-        obj = await parser.parseFile(this.pluginContexts.get(parser.name) ?? this.systemContext(), file, await readBytes(file));
+      if (entry) {
+        obj = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), file, await readBytes(file));
       } else if (inSource) {
         obj = this.assetObject(sourceDir, file, rel);
       } else {
@@ -413,10 +421,37 @@ export class Engine {
     await rimraf(publicDir);
     await ensureDir(publicDir);
 
-    const deployer: DeployerPluginV1 = st.plugins.deployers[0];
-    const ctx = this.pluginContexts.get(deployer.name) ?? this.systemContext();
-    this.log.debug(`deploy ${tasks.length} task(s) via deployer "${deployer.name}"`);
-    await deployer.deploy(ctx, env, tasks);
+    // Partition tasks among deployer units: the first unit (in plugin load
+    // order) whose declared types/extensions cover a task claims it.
+    const deployers = st.plugins.deployers;
+    const claimed: RenderTask[][] = deployers.map(() => []);
+    const orphans: RenderTask[] = [];
+    for (const task of tasks) {
+      const kind: "page" | "asset" = task.copy ? "asset" : "page";
+      const ext = path.extname(task.outPath).toLowerCase();
+      const idx = deployers.findIndex((d) =>
+        (d.unit.types ?? []).includes(kind) || matchExtensions(d.unit.extensions).has(ext),
+      );
+      if (idx === -1) orphans.push(task);
+      else claimed[idx].push(task);
+    }
+    if (orphans.length > 0) {
+      const sample = orphans[0];
+      const covered = deployers.map((d) => `${d.unit.name} (${[...(d.unit.types ?? []), ...(d.unit.extensions ?? [])].join(", ")})`).join("; ");
+      const msg =
+        `${orphans.length} render task(s) match no deployer, e.g. "${path.relative(publicDir, sample.outPath)}" ` +
+        `(kind: ${sample.copy ? "asset" : "page"}). Deployers loaded: ${covered || "none"}. ` +
+        `Install a plugin providing ngwg-deployer-v1 that covers them, or extend the match of an existing deployer.`;
+      this.log.error(msg);
+      throw new Error(msg);
+    }
+
+    for (let i = 0; i < deployers.length; i++) {
+      const d = deployers[i];
+      const ctx = this.pluginContexts.get(d.plugin) ?? this.systemContext();
+      this.log.debug(`deploy ${claimed[i].length} task(s) via deployer "${d.unit.name}"`);
+      await d.unit.deploy(ctx, env, claimed[i]);
+    }
 
     // helper plugins may generate extra artifacts into public/ (sitemap,
     // rss, …) once the pages are in place — protocol subset, fully optional

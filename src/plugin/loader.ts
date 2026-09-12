@@ -21,13 +21,10 @@ import { trace } from "../util/log.ts";
 import { parseYaml } from "../config/yaml.ts";
 import { Logger } from "../util/log.ts";
 import {
-  DEPLOYER_PROTOCOL,
-  HELPER_PROTOCOL,
-  PARSER_PROTOCOL,
   validatePluginModule,
-  type DeployerPluginV1,
-  type HelperPluginV1,
-  type ParserPluginV1,
+  type DeployerUnitV1,
+  type HelperUnitV1,
+  type ParserUnitV1,
   type PluginLoadResult,
 } from "./protocol.ts";
 import type { PluginContext, ThemeConfig, UserConfig } from "../types.ts";
@@ -156,9 +153,11 @@ export async function importPlugin(pluginRoot: string, manifest: PluginManifest,
     return {
       ok: false,
       protocols: [],
-      pluginNames: [],
+      unitNames: [],
       errors: [`entry "${manifest.entry}" not found in plugin ${manifest.name}`],
-      objects: [],
+      parsers: [],
+      deployers: [],
+      helpers: [],
     };
   }
   // plugins may declare npm dependencies ("必要时预编译"): install them
@@ -174,9 +173,11 @@ export async function importPlugin(pluginRoot: string, manifest: PluginManifest,
         return {
           ok: false,
           protocols: [],
-          pluginNames: [],
+          unitNames: [],
           errors: [`bun install failed in ${pluginRoot}: ${res.stderr || res.stdout}`],
-          objects: [],
+          parsers: [],
+          deployers: [],
+          helpers: [],
         };
       }
     }
@@ -189,9 +190,11 @@ export async function importPlugin(pluginRoot: string, manifest: PluginManifest,
     return {
       ok: false,
       protocols: [],
-      pluginNames: [],
+      unitNames: [],
       errors: [`import failed: ${(e as Error).message}`],
-      objects: [],
+      parsers: [],
+      deployers: [],
+      helpers: [],
     };
   }
   const exported = mod?.default ?? mod;
@@ -225,11 +228,18 @@ export interface LoadAllOptions {
   defaultPlugins?: Record<string, string>;
 }
 
+/** A protocol unit together with the manifest name of the module providing it. */
+export interface LoadedUnit<T> {
+  /** manifest name of the plugin module that declared the unit */
+  plugin: string;
+  unit: T;
+}
+
 export interface LoadAllResult {
   loaded: LoadedPlugin[];
-  parsers: ParserPluginV1[];
-  deployers: DeployerPluginV1[];
-  helpers: HelperPluginV1[];
+  parsers: LoadedUnit<ParserUnitV1>[];
+  deployers: LoadedUnit<DeployerUnitV1>[];
+  helpers: HelperUnitV1[];
   /** merged helper namespace exposed to themes as `h` */
   helperMap: Record<string, (...args: any[]) => any>;
 }
@@ -267,9 +277,9 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
   }
 
   const loaded: LoadedPlugin[] = [];
-  const parsers: ParserPluginV1[] = [];
-  const deployers: DeployerPluginV1[] = [];
-  const helpers: HelperPluginV1[] = [];
+  const parsers: LoadedUnit<ParserUnitV1>[] = [];
+  const deployers: LoadedUnit<DeployerUnitV1>[] = [];
+  const helpers: HelperUnitV1[] = [];
   const helperMap: Record<string, (...args: any[]) => any> = {};
 
   for (const [key, url] of Object.entries(declarations)) {
@@ -311,15 +321,13 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
       throw new PluginLoadError(msg);
     }
 
-    for (const obj of result.objects) {
-      if (obj.protocol === PARSER_PROTOCOL) parsers.push(obj as ParserPluginV1);
-      else if (obj.protocol === DEPLOYER_PROTOCOL) deployers.push(obj as DeployerPluginV1);
-      else if (obj.protocol === HELPER_PROTOCOL) {
-        helpers.push(obj as HelperPluginV1);
-        for (const [hname, fn] of Object.entries((obj as HelperPluginV1).helpers)) {
-          if (helperMap[hname]) log.warn(`helper "${hname}" from plugin ${obj.name} shadows an existing helper`);
-          helperMap[hname] = fn;
-        }
+    for (const unit of result.parsers) parsers.push({ plugin: manifest.name, unit });
+    for (const unit of result.deployers) deployers.push({ plugin: manifest.name, unit });
+    for (const unit of result.helpers) {
+      helpers.push(unit);
+      for (const [hname, fn] of Object.entries(unit.helpers)) {
+        if (helperMap[hname]) log.warn(`helper "${hname}" from plugin ${unit.name} shadows an existing helper`);
+        helperMap[hname] = fn;
       }
     }
 
