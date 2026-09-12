@@ -1,6 +1,6 @@
 {
   "name": "ngwg-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ngwg core: event queue, build pipeline, plugin protocols, dev daemon",
   "type": "module",
   "module": "src/index.ts",
