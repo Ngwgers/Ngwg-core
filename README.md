@@ -18,6 +18,8 @@ Core 不直接提供 CLI（见 Ngwg-cli），但插件管理脚本在这里：
 ```fish
 fish scripts/ngwg-plugins.fish install <name> <url> [root]
 fish scripts/ngwg-plugins.fish install-all [root]
+fish scripts/ngwg-plugins.fish update <name> [root]
+fish scripts/ngwg-plugins.fish update-all [root]
 fish scripts/ngwg-plugins.fish list [root]
 fish scripts/ngwg-plugins.fish remove <name> [root]
 fish scripts/ngwg-plugins.fish path [root]
@@ -55,6 +57,8 @@ Core does not ship a CLI itself (see Ngwg-cli), but the plugin management script
 ```fish
 fish scripts/ngwg-plugins.fish install <name> <url> [root]
 fish scripts/ngwg-plugins.fish install-all [root]
+fish scripts/ngwg-plugins.fish update <name> [root]
+fish scripts/ngwg-plugins.fish update-all [root]
 fish scripts/ngwg-plugins.fish list [root]
 fish scripts/ngwg-plugins.fish remove <name> [root]
 fish scripts/ngwg-plugins.fish path [root]

@@ -53,11 +53,8 @@ log levels: default prints the core version, loaded plugins, reload progress
 and errors/warnings; --quiet keeps only errors/warnings; --verbose adds a
 trace of all operations on top of the default output.
 
-the core itself, the default plugins (files, feature) and themes are fetched
-automatically into <root>/.ngwg/ on first use. themes declared under
-themes.<name> land in <root>/.ngwg/themes/<name> (the theme field only
-selects which one to use); the default theme for bare names without a
-declaration is managed by the CLI. override their sources in ngwg.yaml:
+sources for the core, the default plugins (files, feature) and themes can be
+overridden in ngwg.yaml:
 
   Ngwg:
     core-repo-url: https://github.com/Ngwgers/Ngwg-core
@@ -197,16 +194,13 @@ async function cmdInit(root: string, log: Logger, coreRepoUrl?: string, themeRep
     process.exit(1);
   }
   await ensureDir(path.join(root, "source", "_posts"));
-  // sources are injected by the CLI (Core knows no default repos): the theme
-  // declaration drives the theme fetch into .ngwg/themes/pacific, and the
-  // Ngwg section is where the bootstrap scrapes the core repo URL from —
-  // so a freshly init'd project builds outside the monorepo too.
+  // sources are injected by the CLI (Core knows no default repos)
   const themeSource = themeRepoUrl
-    ? `# the theme source is fetched on first use (git clone → .ngwg/themes/pacific)\nthemes:\n  pacific: ${themeRepoUrl}\n`
+    ? `themes:\n  pacific: ${themeRepoUrl}\n`
     : `# declare where the theme comes from, e.g.:\n# themes:\n#   pacific: https://github.com/Ngwgers/Ngwg-default-theme\n`;
   const ngwgSection =
     coreRepoUrl || themeRepoUrl
-      ? `# repo sources used by the CLI (core auto-download / ngwg update)\nNgwg:\n${coreRepoUrl ? `  core-repo-url: ${coreRepoUrl}\n` : ""}${themeRepoUrl ? `  theme-repo-url: ${themeRepoUrl}\n` : ""}`
+      ? `# repo sources used by the CLI\nNgwg:\n${coreRepoUrl ? `  core-repo-url: ${coreRepoUrl}\n` : ""}${themeRepoUrl ? `  theme-repo-url: ${themeRepoUrl}\n` : ""}`
       : `# Ngwg:\n#   core-repo-url: https://github.com/Ngwgers/Ngwg-core\n`;
   await writeText(
     configPath,
@@ -217,7 +211,7 @@ async function cmdInit(root: string, log: Logger, coreRepoUrl?: string, themeRep
     `---\ntitle: 你好，世界\ndate: 2026-01-01\ntags:\n  - 随笔\ncategories: 开始\n---\n\n# 你好，世界\n\n这是第一篇文章。风从海面吹过来。\n`,
   );
   log.ok(`scaffolded ngwg.yaml and source/_posts in ${root}`);
-  log.info("run `ngwg build` to generate public/ (the theme is fetched automatically on first use)");
+  log.info("run `ngwg build` to generate public/");
 }
 
 async function cmdClean(root: string, log: Logger): Promise<void> {
