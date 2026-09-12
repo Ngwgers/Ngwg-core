@@ -9,6 +9,8 @@
 # Usage:
 #   ngwg-plugins.fish install <name> <url> [project-root]
 #   ngwg-plugins.fish install-all [project-root]     # everything in the configs
+#   ngwg-plugins.fish update <name> [project-root]   # re-fetch an installed plugin
+#   ngwg-plugins.fish update-all [project-root]      # re-fetch every installed one
 #   ngwg-plugins.fish list [project-root]
 #   ngwg-plugins.fish remove <name> [project-root]
 #   ngwg-plugins.fish path [project-root]            # print the plugin store
@@ -30,13 +32,16 @@ function fail
     exit 1
 end
 
-# fetch_plugin <name> <url> <dest>
+# fetch_plugin <name> <url> <dest> [replace]
+# With "replace" an already-installed plugin is re-fetched: the new copy is
+# built in a temp dir first, so a failed fetch leaves the old install intact.
 function fetch_plugin
     set -l name $argv[1]
     set -l url $argv[2]
     set -l dest $argv[3]
+    set -l replace $argv[4]
 
-    if test -d "$dest"
+    if test -d "$dest"; and test -z "$replace"
         echo "plugin '$name' already installed at $dest"
         return 0
     end
@@ -104,11 +109,27 @@ function is_installed
 end
 
 # resolve plugin declarations from ngwg.yaml + theme.yaml via the TS helper
+# (status dirname, not the top-level $script_dir: function-local scope does
+# not see it, and this function is also called from other functions)
 function read_declarations
     set -l root $argv[1]
-    set -l core_root (realpath $script_dir/..)
+    set -l core_root (realpath (status dirname)/..)
     bun "$core_root/scripts/plugin-urls.ts" (realpath $root)
     or fail "could not read plugin declarations from $root"
+end
+
+# declared_url <name> <root>: print the URL a plugin is declared with in
+# ngwg.yaml / theme.yaml (empty output when it is not declared anywhere)
+function declared_url
+    set -l name $argv[1]
+    set -l root $argv[2]
+    for line in (read_declarations $root)
+        set -l parts (string split \t -- $line)
+        if test "$parts[2]" = "$name"
+            echo $parts[3]
+            return
+        end
+    end
 end
 
 set -l cmd $argv[1]
@@ -141,6 +162,38 @@ switch $cmd
                         echo "  → fish $script_dir/ngwg-plugins.fish install $name \"$url\""
                     end
             end
+        end
+
+    case update
+        set -l name $rest[1]
+        set -l root $rest[2]
+        test -z "$root"; and set root .
+        test -n "$name"; or fail "usage: ngwg-plugins.fish update <name> [project-root]"
+        set -l store (plugin_store $root)
+        test -d "$store/$name"; or fail "plugin '$name' is not installed (try: ngwg plugin install-all)"
+        set -l url (declared_url "$name" $root)
+        test -n "$url"; or fail "plugin '$name' has no URL declared in ngwg.yaml / theme.yaml — update the declaration first"
+        fetch_plugin "$name" "$url" "$store/$name" replace
+
+    case update-all
+        set -l root $rest[1]
+        test -z "$root"; and set root .
+        set -l store (plugin_store $root)
+        set -l updated 0
+        for line in (read_declarations $root)
+            set -l parts (string split \t -- $line)
+            set -l scope $parts[1]
+            set -l name $parts[2]
+            set -l url $parts[3]
+            if test -d "$store/$name"
+                fetch_plugin "$name" "$url" "$store/$name" replace
+                set updated (math $updated + 1)
+            else
+                echo "plugin '$name' ($scope) is not installed — skipped"
+            end
+        end
+        if test $updated -eq 0
+            echo "(nothing to update: no declared plugin is installed)"
         end
 
     case list
@@ -177,9 +230,11 @@ switch $cmd
         plugin_store $root
 
     case '*'
-        echo "usage: ngwg-plugins.fish {install|install-all|list|remove|path} [args]"
+        echo "usage: ngwg-plugins.fish {install|install-all|update|update-all|list|remove|path} [args]"
         echo "  install <name> <url> [root]   fetch & install one plugin"
         echo "  install-all [root]            install everything declared in ngwg.yaml / theme.yaml"
+        echo "  update <name> [root]          re-fetch an installed plugin from its declared URL"
+        echo "  update-all [root]             re-fetch every installed plugin declared in the configs"
         echo "  list [root]                   list installed plugins"
         echo "  remove <name> [root]          remove an installed plugin"
         echo "  path [root]                   print the plugin store directory"

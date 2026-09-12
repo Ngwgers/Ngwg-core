@@ -11,6 +11,7 @@ import { build, startDevServer, Logger, setLogLevel } from "./index.ts";
 import { addCommand, ADD_USAGE } from "./commands/add.ts";
 import { rimraf, ensureDir, writeText, exists } from "./util/fs.ts";
 import { spawnSync } from "node:child_process";
+import { renameSync, existsSync } from "node:fs";
 import * as path from "node:path";
 
 const USAGE = `ngwg — a quiet static site generator
@@ -30,6 +31,11 @@ usage:
   ngwg plugin list
   ngwg plugin remove <name>
   ngwg plugin path
+  ngwg update [core|theme|plugin [name...]]
+                              update the CLI-managed copies in <root>/.ngwg/
+                              (core, default theme, installed plugins) to the
+                              latest version; without a target everything is
+                              updated
   ngwg clean                  remove public/ and the .ngwg/ directory
   ngwg help | version
 
@@ -63,6 +69,10 @@ export interface CliOptions {
   defaultPlugins: Record<string, string>;
   /** official fallback theme for bare theme names */
   defaultTheme?: { name: string; dir: string };
+  /** repo URL used by `ngwg update core` (resolved/injected by the CLI) */
+  coreRepoUrl?: string;
+  /** repo URL used by `ngwg update theme` (resolved/injected by the CLI) */
+  themeRepoUrl?: string;
 }
 
 export async function cliMain(opts: CliOptions): Promise<void> {
@@ -127,6 +137,9 @@ export async function cliMain(opts: CliOptions): Promise<void> {
     case "plugin":
     case "plugins":
       cmdPlugin(args, coreDir, rootDir, log);
+      return;
+    case "update":
+      await withExit(() => cmdUpdate(args, { coreDir, rootDir, log, coreRepoUrl: opts.coreRepoUrl, themeRepoUrl: opts.themeRepoUrl }));
       return;
     default:
       log.error(`unknown command '${cmd}'`);
@@ -209,4 +222,90 @@ function cmdPlugin(args: string[], coreDir: string, root: string, log: Logger): 
   }
   const res = spawnSync("fish", full, { stdio: "inherit" });
   process.exit(res.status ?? 1);
+}
+
+/** `ngwg update` — refresh the CLI-managed copies under <root>/.ngwg/.
+ * Core and theme stores are re-cloned from the repo URLs the CLI resolved;
+ * plugin stores are re-fetched by the management fish script, which knows
+ * every declaration flavour (git, tarball, local copy). */
+async function cmdUpdate(
+  args: string[],
+  o: { coreDir: string; rootDir: string; log: Logger; coreRepoUrl?: string; themeRepoUrl?: string },
+): Promise<void> {
+  const coreValidate = (d: string) => existsSync(path.join(d, "src", "index.ts"));
+  const themeValidate = (d: string) => existsSync(path.join(d, "theme.yaml"));
+  const target = args[0];
+  if (target === undefined) {
+    await updateManagedCopy("core", path.join(o.rootDir, ".ngwg", "core"), o.coreRepoUrl, coreValidate, o.log);
+    await updateManagedCopy("theme", path.join(o.rootDir, ".ngwg", "theme"), o.themeRepoUrl, themeValidate, o.log);
+    const status = updatePlugins([], o.coreDir, o.rootDir);
+    if (status !== 0) process.exit(status);
+    return;
+  }
+  switch (target) {
+    case "core":
+      await updateManagedCopy("core", path.join(o.rootDir, ".ngwg", "core"), o.coreRepoUrl, coreValidate, o.log);
+      return;
+    case "theme":
+      await updateManagedCopy("theme", path.join(o.rootDir, ".ngwg", "theme"), o.themeRepoUrl, themeValidate, o.log);
+      return;
+    case "plugin":
+    case "plugins": {
+      const status = updatePlugins(args.slice(1), o.coreDir, o.rootDir);
+      if (status !== 0) process.exit(status);
+      return;
+    }
+    default:
+      o.log.error(`unknown update target '${target}' (use core, theme or plugin)`);
+      console.log("usage: ngwg update [core|theme|plugin [name...]]");
+      process.exit(2);
+  }
+}
+
+/** Re-clone a CLI-managed store copy (core/theme) from its repo URL. The
+ * fresh clone is fetched and validated in a temp dir first, so a failed
+ * update never destroys the working copy. */
+async function updateManagedCopy(
+  name: string,
+  storeDir: string,
+  repoUrl: string | undefined,
+  validate: (dir: string) => boolean,
+  log: Logger,
+): Promise<void> {
+  if (!existsSync(storeDir)) {
+    log.info(`no CLI-managed ${name} at ${storeDir} — nothing to update`);
+    return;
+  }
+  if (!repoUrl) {
+    throw new Error(`cannot update ${name}: the CLI did not provide a repo URL for it. ` + `Set Ngwg.core-repo-url / Ngwg.theme-repo-url in ngwg.yaml, then rerun ngwg update.`);
+  }
+  const tmp = `${storeDir}.update`;
+  await rimraf(tmp);
+  const res = spawnSync("git", ["clone", "--depth", "1", repoUrl, tmp], { stdio: "pipe" });
+  if (res.status !== 0 || !validate(tmp)) {
+    await rimraf(tmp);
+    throw new Error(
+      `could not update ${name} from ${repoUrl}:\n${res.stderr?.toString() || ""}` +
+        `Check Ngwg.core-repo-url / Ngwg.theme-repo-url in ngwg.yaml, then rerun ngwg update.`,
+    );
+  }
+  await rimraf(storeDir);
+  renameSync(tmp, storeDir);
+  log.ok(`updated ${name} → ${storeDir}`);
+  if (name === "core") log.info("the new core is picked up on the next ngwg run");
+}
+
+/** Plugin updates go through the management fish script (fetch flavours and
+ * declaration lookup live there). Returns the script's exit status. */
+function updatePlugins(names: string[], coreDir: string, root: string): number {
+  const script = path.join(coreDir, "scripts", "ngwg-plugins.fish");
+  if (names.length === 0) {
+    const res = spawnSync("fish", [script, "update-all", root], { stdio: "inherit" });
+    return res.status ?? 1;
+  }
+  for (const name of names) {
+    const res = spawnSync("fish", [script, "update", name, root], { stdio: "inherit" });
+    if (res.status !== 0) return res.status ?? 1;
+  }
+  return 0;
 }
