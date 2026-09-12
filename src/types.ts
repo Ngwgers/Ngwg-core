@@ -53,8 +53,14 @@ export interface SiteData {
   title: string;
   description: string;
   baseurl: string;
-  /** all posts, sorted by date descending */
+  /** all posts, sorted by date descending (frontmatter `hidden: true` excluded) */
   posts: SourceObject[];
+  /**
+   * hidden posts (`hidden: true`): still deployed and reachable at their URL
+   * via their own page task, but absent from every listing (index, tags,
+   * categories, archives) and from RSS/sitemap
+   */
+  hiddenPosts: SourceObject[];
   /** all non-post pages */
   pages: SourceObject[];
   /** tag name -> posts */

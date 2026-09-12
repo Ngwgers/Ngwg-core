@@ -36,11 +36,18 @@ export function buildSiteData(
   contexts: Map<string, PluginContext>,
 ): SiteData {
   const all = [...sources.values()];
-  const posts = all
+  const allPosts = all
     .filter((s) => s.kind === "post")
     .sort((a, b) => postDate(b).getTime() - postDate(a).getTime());
+  // hidden posts (frontmatter `hidden: true`) stay deployed and reachable at
+  // their URL, but every listing (index, tags, categories, archives, RSS,
+  // sitemap) is built from the visible list only — their tags/categories are
+  // neither created nor counted
+  const posts = allPosts.filter((p) => !p.meta.hidden);
+  const hiddenPosts = allPosts.filter((p) => p.meta.hidden);
 
-  // prev (newer) / next (older) links; posts are sorted newest-first
+  // prev (newer) / next (older) links; posts are sorted newest-first.
+  // Computed over the visible list so hidden posts never appear as neighbors.
   posts.forEach((post, i) => {
     post.meta._prev = i > 0 ? posts[i - 1] : null;
     post.meta._next = i < posts.length - 1 ? posts[i + 1] : null;
@@ -78,6 +85,7 @@ export function buildSiteData(
     description: config.description ?? "",
     baseurl: config.baseurl ?? "/",
     posts,
+    hiddenPosts,
     pages,
     tags,
     categories,

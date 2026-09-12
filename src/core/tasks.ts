@@ -44,8 +44,9 @@ export function buildRenderTasks(
   const layouts = themeLayoutMap(theme);
   const perPage = Math.max(1, theme.config.per_page ?? 10);
 
-  // posts
-  for (const post of site.posts) {
+  // posts — including hidden ones: a hidden post keeps its own page (it must
+  // stay reachable at its URL) but appears in no listing built from site.posts
+  for (const post of [...site.posts, ...(site.hiddenPosts ?? [])]) {
     addTask({
       outPath: outPath(publicDir, post.url),
       template: post.meta.layout ?? layouts.post,
@@ -119,10 +120,12 @@ export function buildRenderTasks(
     });
   }
 
-  // source assets (any non-parsed file, e.g. images, robots.txt, extra css)
+  // source assets (any non-parsed file, e.g. images, robots.txt, extra css).
+  // Objects with a url (e.g. images a parser extracted into a unified
+  // location) deploy there; plain assets mirror the source tree.
   for (const asset of sourceAssets) {
     tasks.push({
-      outPath: path.join(publicDir, asset.relPath),
+      outPath: path.join(publicDir, asset.url || asset.relPath),
       copy: { content: asset.raw ?? new Uint8Array() },
     });
   }
