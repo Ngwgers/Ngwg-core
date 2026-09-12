@@ -34,7 +34,7 @@ import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
 import type { DeployEnv, PluginContext, RenderTask, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
 
-export const CORE_VERSION = "0.1.0";
+export const CORE_VERSION = "0.2.0";
 
 export class RunInterrupted extends Error {
   constructor() {
@@ -299,6 +299,8 @@ export class Engine {
   private _pendingThemeRoot: string | null = null;
   private _pendingTheme: ThemeObject | null = null;
   private _pendingPlugins: LoadAllResult | null = null;
+  /** source file abs path -> paths of the objects parsing it produced */
+  private derivedByOwner = new Map<string, string[]>();
 
   private refreshHelperMap() {
     this.helperMap = {};
@@ -334,52 +336,85 @@ export class Engine {
     parsers: LoadedUnit<ParserUnitV1>[],
   ): Promise<Map<string, SourceObject>> {
     const sources = new Map<string, SourceObject>();
+    this.derivedByOwner.clear();
     if (!(await isDir(sourceDir))) {
       this.log.warn(`source directory ${sourceDir} does not exist — site will contain no content`);
       return sources;
     }
     const files = await walkFiles(sourceDir);
+    // parsers may emit objects for files other than the one they parsed
+    // (derived objects, e.g. images referenced by a markdown file); stage
+    // them so a parser's output deterministically wins over the plain-asset
+    // copy of the same file, whichever pool worker finished first
+    const staged = new Map<string, SourceObject>();
+    const walked = new Map<string, SourceObject>();
     const pool = new Pool(8);
     await pool.run(files, async (rel) => {
       const abs = path.join(sourceDir, rel);
       const ext = extOf(rel);
       const entry = this.findParser(parsers, ext);
-      let obj: SourceObject | null;
       if (entry) {
-        this.log.debug(`parse ${rel} via ${entry.unit.name}`);
-        obj = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), abs, await readBytes(abs));
+        const result = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), abs, await readBytes(abs));
+        const objs = (Array.isArray(result) ? result : [result]).filter((o): o is SourceObject => o != null);
+        for (const obj of objs) staged.set(obj.path, obj);
+        this.derivedByOwner.set(abs, objs.map((o) => o.path));
+        this.log.debug(`parse ${rel} via ${entry.unit.name} (${objs.length} object(s))`);
       } else {
         this.log.debug(`asset ${rel} (no parser for ${ext || "raw file"})`);
-        obj = this.assetObject(sourceDir, abs, rel);
+        walked.set(abs, this.assetObject(sourceDir, abs, rel));
       }
-      if (obj) sources.set(abs, obj);
     });
+    sources.clear();
+    for (const [p, obj] of walked) sources.set(p, obj);
+    for (const [p, obj] of staged) sources.set(p, obj);
     return sources;
   }
 
   private async reparseSources(sourceDir: string, parsers: LoadedUnit<ParserUnitV1>[], changed: string[]) {
     if (!this.state) return;
+    // reverse index: derived object path -> the source files that produced it
+    const ownersOf = new Map<string, string[]>();
+    for (const [owner, keys] of this.derivedByOwner) {
+      for (const key of keys) {
+        const list = ownersOf.get(key) ?? [];
+        list.push(owner);
+        ownersOf.set(key, list);
+      }
+    }
+
+    // owners (e.g. markdown files) whose derived objects must be rebuilt:
+    // either the owner itself changed, or a file one of its objects derived
+    // from changed (editing a referenced image re-parses the referencing post)
+    const reparse = new Set<string>();
     for (const file of changed) {
       if (path.dirname(file) === this.rootDir || file === this.state.configFile) continue;
       const inSource = file.startsWith(sourceDir + path.sep);
       const inPlugins = file.includes(`${path.sep}.ngwg${path.sep}plugins${path.sep}`);
       if (!inSource && !inPlugins) continue;
+      if (this.findParser(parsers, extOf(file))) {
+        reparse.add(file);
+        continue;
+      }
+      if (ownersOf.has(file)) continue; // handled by re-parsing its owner(s)
       if (!(await exists(file))) {
         this.state.sources.delete(file);
         continue;
       }
       const rel = path.relative(sourceDir, file);
-      const entry = this.findParser(parsers, extOf(file));
-      let obj: SourceObject | null;
-      if (entry) {
-        obj = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), file, await readBytes(file));
-      } else if (inSource) {
-        obj = this.assetObject(sourceDir, file, rel);
-      } else {
-        continue;
-      }
-      if (obj) this.state.sources.set(file, obj);
-      else this.state.sources.delete(file);
+      this.state.sources.set(file, this.assetObject(sourceDir, file, rel));
+    }
+
+    for (const owner of reparse) {
+      for (const key of this.derivedByOwner.get(owner) ?? []) this.state.sources.delete(key);
+      this.derivedByOwner.delete(owner);
+      this.state.sources.delete(owner);
+      if (!(await exists(owner))) continue;
+      const entry = this.findParser(parsers, extOf(owner));
+      if (!entry) continue;
+      const result = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), owner, await readBytes(owner));
+      const objs = (Array.isArray(result) ? result : [result]).filter((o): o is SourceObject => o != null);
+      for (const obj of objs) this.state.sources.set(obj.path, obj);
+      this.derivedByOwner.set(owner, objs.map((o) => o.path));
     }
   }
 
@@ -428,19 +463,23 @@ export class Engine {
     await rimraf(publicDir);
     await ensureDir(publicDir);
 
-    // Partition tasks among deployer units: the first unit (in plugin load
-    // order) whose declared types/extensions cover a task claims it.
+    // Partition tasks among deployer units in claim order (user config →
+    // theme required → must-load fallback, flattened per-plugin unit order):
+    // regular units match by declared types/extensions; fallback units get
+    // whatever nobody claimed, after every regular unit had its chance.
     const deployers = st.plugins.deployers;
+    const withIndex = deployers.map((d, i) => ({ d, i }));
+    const order = [...withIndex.filter((e) => !e.d.unit.fallback), ...withIndex.filter((e) => e.d.unit.fallback)];
     const claimed: RenderTask[][] = deployers.map(() => []);
     const orphans: RenderTask[] = [];
     for (const task of tasks) {
       const kind: "page" | "asset" = task.copy ? "asset" : "page";
       const ext = path.extname(task.outPath).toLowerCase();
-      const idx = deployers.findIndex((d) =>
-        (d.unit.types ?? []).includes(kind) || matchExtensions(d.unit.extensions).has(ext),
+      const idx = order.find(({ d }) =>
+        !!d.unit.fallback || (d.unit.types ?? []).includes(kind) || matchExtensions(d.unit.extensions).has(ext),
       );
-      if (idx === -1) orphans.push(task);
-      else claimed[idx].push(task);
+      if (idx === undefined) orphans.push(task);
+      else claimed[idx.i].push(task);
     }
     if (orphans.length > 0) {
       const sample = orphans[0];

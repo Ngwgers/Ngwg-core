@@ -253,13 +253,16 @@ export interface LoadAllResult {
 export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResult> {
   const { rootDir, config, themeConfig, log, queue } = opts;
 
-  // merge declarations: user config wins over theme required plugins
+  // merge declarations. Order matters: it decides the claim priority of
+  // parser/deployer units. User config first, then theme required (user wins
+  // value conflicts), then caller defaults — i.e. 用户声明 → 主题声明 → must-load
+  // 兜底; within a plugin, units keep their own array order.
   const declarations: Record<string, string> = {};
+  Object.assign(declarations, config.plugins ?? {});
   for (const [k, v] of Object.entries(themeConfig?.plugins?.required ?? {})) {
     if (typeof v !== "string") throw new PluginLoadError(`theme config: plugin "${k}" needs a URL string`);
-    declarations[k] = v;
+    if (!declarations[k]) declarations[k] = v;
   }
-  Object.assign(declarations, config.plugins ?? {});
   // caller defaults last: they only fill keys nobody declared explicitly
   for (const [k, v] of Object.entries(opts.defaultPlugins ?? {})) {
     if (!declarations[k]) declarations[k] = v;

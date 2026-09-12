@@ -59,8 +59,19 @@ export interface ParserUnitV1 {
   extensions?: string[];
   /** file types handled, keys of FILE_TYPES, e.g. ["markdown"] */
   types?: string[];
-  /** convert one matched file into a SourceObject (or null to skip it) */
-  parseFile(ctx: PluginContext, filePath: string, content: Uint8Array): Promise<SourceObject | null> | SourceObject | null;
+  /**
+   * convert one matched file into a SourceObject (or null to skip it).
+   * May also return an ARRAY: the primary object plus any derived objects
+   * the parser extracted from it (e.g. images referenced by a markdown
+   * file). Each returned object must carry its own absolute `path` — the
+   * engine keys the source map by it, and a parser's output takes
+   * precedence over the plain-asset copy of the same file.
+   */
+  parseFile(ctx: PluginContext, filePath: string, content: Uint8Array):
+    | Promise<SourceObject | SourceObject[] | null>
+    | SourceObject
+    | SourceObject[]
+    | null;
 }
 
 export interface DeployerUnitV1 {
@@ -71,6 +82,13 @@ export interface DeployerUnitV1 {
   extensions?: string[];
   /** task kinds handled: "page" (layout render) and/or "asset" (verbatim copy) */
   types?: TaskTypeV1[];
+  /**
+   * catch-all: matches every task no regular deployer claimed. Must not be
+   * combined with extensions/types. Deployers are consulted in load order
+   * (user config → theme required → must-load fallback, flattened per-plugin
+   * unit order); fallback units form the tail of that order.
+   */
+  fallback?: boolean;
   /** write the matched tasks into env.publicDir */
   deploy(ctx: PluginContext, env: DeployEnv, tasks: RenderTask[]): Promise<void> | void;
 }
@@ -156,16 +174,26 @@ function validateParserUnit(unit: any, label: string, errors: string[]): void {
 }
 
 function validateDeployerUnit(unit: any, label: string, errors: string[]): void {
-  const hasExt = Array.isArray(unit.extensions) && unit.extensions.length > 0;
-  const hasTypes = Array.isArray(unit.types) && unit.types.length > 0;
-  if (!hasExt && !hasTypes) {
-    errors.push(`${label}: deployer unit must declare what it handles — a non-empty "types" array of task kinds (${TASK_TYPES.join(", ")}) and/or a non-empty "extensions" array of output extensions`);
+  if (unit.fallback !== undefined && typeof unit.fallback !== "boolean") {
+    errors.push(`${label}: "fallback" must be a boolean when provided`);
+    return;
   }
-  if (unit.extensions !== undefined && !validateExtensions(unit.extensions, label, errors)) return;
-  if (unit.types !== undefined) {
-    for (const t of unit.types) {
-      if (!TASK_TYPES.includes(t)) {
-        errors.push(`${label}: unknown task kind ${JSON.stringify(t)}; known kinds: ${TASK_TYPES.join(", ")}`);
+  if (unit.fallback === true) {
+    if (unit.extensions !== undefined || unit.types !== undefined) {
+      errors.push(`${label}: a fallback deployer matches everything unclaimed — it must not declare "extensions" or "types"`);
+    }
+  } else {
+    const hasExt = Array.isArray(unit.extensions) && unit.extensions.length > 0;
+    const hasTypes = Array.isArray(unit.types) && unit.types.length > 0;
+    if (!hasExt && !hasTypes) {
+      errors.push(`${label}: deployer unit must declare what it handles — a non-empty "types" array of task kinds (${TASK_TYPES.join(", ")}) and/or a non-empty "extensions" array of output extensions, or "fallback: true"`);
+    }
+    if (unit.extensions !== undefined && !validateExtensions(unit.extensions, label, errors)) return;
+    if (unit.types !== undefined) {
+      for (const t of unit.types) {
+        if (!TASK_TYPES.includes(t)) {
+          errors.push(`${label}: unknown task kind ${JSON.stringify(t)}; known kinds: ${TASK_TYPES.join(", ")}`);
+        }
       }
     }
   }
