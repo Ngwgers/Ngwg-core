@@ -27,7 +27,7 @@ import {
   type ParserUnitV1,
   type PluginLoadResult,
 } from "./protocol.ts";
-import type { PluginContext, ThemeConfig, UserConfig } from "../types.ts";
+import type { PluginContext, PluginDeclaration, PluginOptions, ThemeConfig, UserConfig } from "../types.ts";
 import type { EventQueue } from "../events/queue.ts";
 
 export interface PluginManifest {
@@ -42,6 +42,8 @@ export interface LoadedPlugin {
   key: string;
   /** url/path as written in the config */
   url: string;
+  /** options from a { url, option } declaration (string declarations have none) */
+  option?: Record<string, any>;
   /** absolute local directory of the plugin */
   root: string;
   manifest: PluginManifest;
@@ -217,8 +219,11 @@ export interface LoadAllOptions {
   themeConfig?: ThemeConfig;
   log: Logger;
   queue: EventQueue;
-  /** creates the per-plugin context (engine wires events/config in) */
-  makeContext: (pluginName: string, trusted: boolean) => PluginContext;
+  /**
+   * creates the per-plugin context (engine wires events/config in). The
+   * options value is provided only for plugins implementing ngwg-option-v1.
+   */
+  makeContext: (pluginName: string, trusted: boolean, options?: PluginOptions) => PluginContext;
   /**
    * fallback declarations injected by the caller (the CLI hardcodes the
    * official files/feature URLs there). Used only when neither the user
@@ -249,23 +254,31 @@ export interface LoadAllResult {
  * caller-provided defaults for keys nobody declared (the CLI passes the
  * official files/feature URLs there). Any load failure aborts the build:
  * we log a warning and throw so the CLI exits non-zero.
+ *
+ * Loading happens in two passes: pass 1 resolves/imports every module and
+ * computes each plugin's option surface (ngwg-option-v1), pass 2 creates the
+ * contexts — with complete `ctx.options.shared` — runs onLoad and registers
+ * units in declaration order.
  */
 export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResult> {
   const { rootDir, config, themeConfig, log, queue } = opts;
+
+  const asDeclaration = (v: string | PluginDeclaration): { url: string; option?: Record<string, any> } =>
+    typeof v === "string" ? { url: v } : { url: v.url, option: v.option };
 
   // merge declarations. Order matters: it decides the claim priority of
   // parser/deployer units. User config first, then theme required (user wins
   // value conflicts), then caller defaults — i.e. 用户声明 → 主题声明 → must-load
   // 兜底; within a plugin, units keep their own array order.
-  const declarations: Record<string, string> = {};
-  Object.assign(declarations, config.plugins ?? {});
+  const declarations: Record<string, { url: string; option?: Record<string, any> }> = {};
+  for (const [k, v] of Object.entries(config.plugins ?? {})) declarations[k] = asDeclaration(v);
   for (const [k, v] of Object.entries(themeConfig?.plugins?.required ?? {})) {
     if (typeof v !== "string") throw new PluginLoadError(`theme config: plugin "${k}" needs a URL string`);
-    if (!declarations[k]) declarations[k] = v;
+    if (!declarations[k]) declarations[k] = { url: v };
   }
   // caller defaults last: they only fill keys nobody declared explicitly
   for (const [k, v] of Object.entries(opts.defaultPlugins ?? {})) {
-    if (!declarations[k]) declarations[k] = v;
+    if (!declarations[k]) declarations[k] = { url: v };
   }
 
   // optional theme plugins: never fetched, only hinted — and only when the
@@ -285,10 +298,14 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
   const helpers: HelperUnitV1[] = [];
   const helperMap: Record<string, (...args: any[]) => any> = {};
 
-  for (const [key, url] of Object.entries(declarations)) {
+  // --- pass 1: resolve, import, compute option surfaces ---------------------
+  const optionSurfaces = new Map<string, { self: Record<string, any>; published: Record<string, any>; readShared: boolean }>();
+  const pending: { key: string; url: string; option?: Record<string, any>; pluginRoot: string; manifest: PluginManifest; result: PluginLoadResult }[] = [];
+
+  for (const [key, decl] of Object.entries(declarations)) {
     let pluginRoot: string;
     try {
-      pluginRoot = await resolvePluginDir(key, url, rootDir, log);
+      pluginRoot = await resolvePluginDir(key, decl.url, rootDir, log);
     } catch (e) {
       log.error(`plugin "${key}" could not be resolved: ${(e as Error).message}`);
       throw e;
@@ -308,13 +325,58 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
       log.error(msg);
       throw new PluginLoadError(msg);
     }
+    pending.push({ key, url: decl.url, option: decl.option, pluginRoot, manifest, result });
 
+    // ngwg-option-v1: without an options unit the plugin gets NO options at
+    // all — user configuration is never handed to it
+    const optionUnit = result.options[0];
+    if (!optionUnit) continue;
+
+    const declaredPublic = new Set(optionUnit.public ?? []);
+    const declaredPrivate = new Set(optionUnit.private ?? []);
+    const self: Record<string, any> = {};
+    const published: Record<string, any> = {};
+    for (const [k, v] of Object.entries(decl.option ?? {})) {
+      if (k === "private") {
+        // private options only ever reach the plugin itself
+        Object.assign(self, v);
+        continue;
+      }
+      if (declaredPrivate.has(k)) {
+        log.warn(
+          `plugin "${key}" declared option "${k}" as private — place it under plugins.${key}.option.private.${k}; the top-level value is ignored`,
+        );
+        continue;
+      }
+      self[k] = v;
+      if (declaredPublic.has(k)) published[k] = v;
+    }
+    for (const k of declaredPublic) {
+      if (decl.option?.private && k in decl.option.private) {
+        log.warn(`plugin "${key}" option "${k}" is declared public but placed under option.private — it stays private`);
+      }
+    }
+    optionSurfaces.set(manifest.name, { self, published, readShared: optionUnit.readShared === true });
+  }
+
+  // --- pass 2: contexts (with complete shared options), onLoad, registration
+  for (const { key, url, option, pluginRoot, manifest, result } of pending) {
     // trust gate for custom event injection: plugin.<name>.allowCustomEvent
     const trusted =
       config.plugin?.[manifest.name]?.allowCustomEvent === true ||
       config.plugin?.[key]?.allowCustomEvent === true;
     if (trusted) queue.trustPlugin(manifest.name);
-    const ctx = opts.makeContext(manifest.name, trusted);
+
+    const surface = optionSurfaces.get(manifest.name);
+    const optionsValue = surface
+      ? {
+          self: surface.self,
+          shared: surface.readShared
+            ? Object.fromEntries([...optionSurfaces].filter(([n]) => n !== manifest.name).map(([n, s]) => [n, s.published]))
+            : {},
+        }
+      : undefined;
+    const ctx = opts.makeContext(manifest.name, trusted, optionsValue);
 
     try {
       await result.module?.onLoad?.(ctx);
@@ -334,7 +396,7 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
       }
     }
 
-    loaded.push({ key, url, root: pluginRoot, manifest, result });
+    loaded.push({ key, url, root: pluginRoot, manifest, result, option });
     log.debug(`loaded plugin ${manifest.name} v${manifest.version} [${result.protocols.join(", ")}] from ${pluginRoot}`);
   }
 

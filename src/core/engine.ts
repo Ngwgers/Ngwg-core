@@ -32,7 +32,7 @@ import { matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plug
 import { loadTheme, resolveThemeDir, ThemeError } from "./theme.ts";
 import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
-import type { DeployEnv, PluginContext, RenderTask, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
+import type { DeployEnv, PluginContext, PluginOptions, RenderTask, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
 
 export const CORE_VERSION = "0.2.0";
 
@@ -89,7 +89,7 @@ export class Engine {
   // Plugin context factory
   // -------------------------------------------------------------------------
 
-  private makeContext = (pluginName: string, trusted: boolean): PluginContext => {
+  private makeContext = (pluginName: string, trusted: boolean, options?: PluginOptions): PluginContext => {
     const queue = this.queue;
     const engine = this;
     const ctx: PluginContext = {
@@ -115,6 +115,9 @@ export class Engine {
         path
           .relative(path.resolve(this.rootDir, engine.currentConfig?.source_dir ?? "source"), filePath)
           .replace(/\\/g, "/"),
+      // option exposure (ngwg-option-v1); undefined for plugins that do not
+      // implement the protocol — user configuration is never handed to them
+      options,
       events: {
         on: (name, handler) => queue.on(name, handler),
         emit: async (name, payload) => {

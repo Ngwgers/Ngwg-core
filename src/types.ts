@@ -117,8 +117,8 @@ export interface UserConfig {
   theme: string | Record<string, Record<string, any>>;
   source_dir?: string;
   public_dir?: string;
-  /** plugin name -> URL (remote repo or local path) */
-  plugins?: Record<string, string>;
+  /** plugin name -> URL/path — or a declaration object with options */
+  plugins?: Record<string, string | PluginDeclaration>;
   /** per-plugin options; `plugin.<name>.allowCustomEvent` gates event injection */
   plugin?: Record<string, Record<string, any>>;
   /** dev server port */
@@ -128,6 +128,37 @@ export interface UserConfig {
    * weak-network reachability; 0 or negative disables it (default)
    */
   dev_speed?: number;
+}
+
+/**
+ * A plugin declaration with options: `plugins.<name>` in ngwg.yaml may be a
+ * plain URL string or an object of this shape.
+ */
+export interface PluginDeclaration {
+  /** where to fetch/load the plugin from (same semantics as the string form) */
+  url: string;
+  /**
+   * options for the plugin. Top-level keys are public candidates (shareable
+   * with other opted-in plugins, as far as the plugin declares them public);
+   * `private.<key>` holds secrets (API keys, …) that only the plugin itself
+   * can read. Exposure is gated by the plugin implementing ngwg-option-v1.
+   */
+  option?: Record<string, any>;
+}
+
+/**
+ * Option exposure for plugins implementing ngwg-option-v1. Absent on the
+ * context when the plugin does not implement the protocol — configuration
+ * is then never handed to the plugin.
+ */
+export interface PluginOptions {
+  /** the plugin's own options: `option.*` plus its `option.private.*` flattened in */
+  self: Record<string, any>;
+  /**
+   * other plugins' public options keyed by their manifest name — only
+   * populated when the reading plugin declared `readShared: true`
+   */
+  shared: Record<string, Record<string, any>>;
 }
 
 export interface ThemeConfig {
@@ -174,6 +205,11 @@ export interface PluginContext {
    * absolute filePath it receives
    */
   relPath(filePath: string): string;
+  /**
+   * options exposure (ngwg-option-v1). Only present when the plugin module
+   * implements the protocol; otherwise configuration is never handed over.
+   */
+  options?: PluginOptions;
   events: {
     /** listen to a workflow event (built-in steps or injected custom events) */
     on(name: string, handler: (payload: any) => void | Promise<void>): void;

@@ -110,11 +110,25 @@ export function validateUserConfig(config: UserConfig, configFile: string): stri
   }
   if (config.plugins !== undefined) {
     if (typeof config.plugins !== "object" || config.plugins === null || Array.isArray(config.plugins)) {
-      errors.push(`${configFile}: "plugins" must be a map of { name: url }`);
+      errors.push(`${configFile}: "plugins" must be a map of { name: url-or-declaration }`);
     } else {
       for (const [k, v] of Object.entries(config.plugins)) {
-        if (typeof v !== "string" || !v.trim()) {
-          errors.push(`${configFile}: plugins.${k} must be a URL or path string`);
+        if (typeof v === "string") {
+          if (!v.trim()) errors.push(`${configFile}: plugins.${k} must be a URL or path string`);
+        } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+          if (typeof (v as any).url !== "string" || !(v as any).url.trim()) {
+            errors.push(`${configFile}: plugins.${k}.url must be a URL or path string`);
+          }
+          if (
+            (v as any).option !== undefined &&
+            (typeof (v as any).option !== "object" || (v as any).option === null || Array.isArray((v as any).option))
+          ) {
+            errors.push(`${configFile}: plugins.${k}.option must be a map of options`);
+          } else if ((v as any).option?.private !== undefined && typeof (v as any).option.private !== "object") {
+            errors.push(`${configFile}: plugins.${k}.option.private must be a map of private options`);
+          }
+        } else {
+          errors.push(`${configFile}: plugins.${k} must be a URL/path string or a { url, option } map`);
         }
       }
     }

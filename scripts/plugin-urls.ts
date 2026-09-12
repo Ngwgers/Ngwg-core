@@ -15,12 +15,14 @@ if (!root) {
   process.exit(2);
 }
 
-const configPath = [path.join(root, "ngwg.yaml"), path.join(root, "ngwg.yml")].find((p) => existsSync(p));
-if (configPath) {
-  const cfg = parseYaml(readFileSync(configPath, "utf8"));
-  for (const [name, url] of Object.entries(cfg?.plugins ?? {})) {
-    if (typeof url === "string" && url.trim()) console.log(`user\t${name}\t${url.trim()}`);
-  }
+  const configPath = [path.join(root, "ngwg.yaml"), path.join(root, "ngwg.yml")].find((p) => existsSync(p));
+  if (configPath) {
+    const cfg = parseYaml(readFileSync(configPath, "utf8"));
+    for (const [name, decl] of Object.entries(cfg?.plugins ?? {})) {
+      // plugins.<name> is a URL string or a { url, option } declaration
+      const url = typeof decl === "string" ? decl : (decl as any)?.url;
+      if (typeof url === "string" && url.trim()) console.log(`user\t${name}\t${url.trim()}`);
+    }
   // theme may be a string or a { <name-or-path>: { overrides } } map
   const theme = typeof cfg?.theme === "object" && cfg?.theme !== null ? Object.keys(cfg.theme)[0] : cfg?.theme;
   // resolve theme.yaml to read its plugin declarations too; the CLI exports

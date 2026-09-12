@@ -26,8 +26,9 @@ import type {
 export const PARSER_PROTOCOL = "ngwg-parser-v1";
 export const DEPLOYER_PROTOCOL = "ngwg-deployer-v1";
 export const HELPER_PROTOCOL = "ngwg-helper-v1";
+export const OPTION_PROTOCOL = "ngwg-option-v1";
 
-export const KNOWN_PROTOCOLS = [PARSER_PROTOCOL, DEPLOYER_PROTOCOL, HELPER_PROTOCOL] as const;
+export const KNOWN_PROTOCOLS = [PARSER_PROTOCOL, DEPLOYER_PROTOCOL, HELPER_PROTOCOL, OPTION_PROTOCOL] as const;
 
 /**
  * Built-in file types a parser unit can claim by name. A type is just a
@@ -108,12 +109,37 @@ export interface HelperUnitV1 {
   afterDeploy?(ctx: PluginContext, env: DeployEnv): Promise<void> | void;
 }
 
-export type ProtocolUnit = ParserUnitV1 | DeployerUnitV1 | HelperUnitV1;
+/**
+ * Declares which options a plugin reads (ngwg-option-v1). Implementing this
+ * protocol is the GATE for option exposure: a module without an options unit
+ * never receives ctx.options, even when the user configured some.
+ */
+export interface OptionUnitV1 {
+  name: string;
+  version: string;
+  /**
+   * option keys this plugin publishes for multi-plugin collaboration. A user
+   * key placed at `plugins.<name>.option.<key>` reaches other plugins'
+   * ctx.options.shared only when listed here.
+   */
+  public?: string[];
+  /**
+   * option keys holding secrets (API keys, …). Users must place them under
+   * `plugins.<name>.option.private.<key>`; a key listed here but placed at
+   * the top level is rejected with a warning and never passed anywhere.
+   */
+  private?: string[];
+  /** opt in to reading other plugins' public options via ctx.options.shared */
+  readShared?: boolean;
+}
+
+export type ProtocolUnit = ParserUnitV1 | DeployerUnitV1 | HelperUnitV1 | OptionUnitV1;
 
 export interface PluginModule {
   parsers?: ParserUnitV1[];
   deployers?: DeployerUnitV1[];
   helpers?: HelperUnitV1[];
+  options?: OptionUnitV1[];
   onLoad?(ctx: PluginContext): void | Promise<void>;
   onUnload?(): void | Promise<void>;
 }
@@ -128,6 +154,7 @@ export interface PluginLoadResult {
   parsers: ParserUnitV1[];
   deployers: DeployerUnitV1[];
   helpers: HelperUnitV1[];
+  options: OptionUnitV1[];
 }
 
 function isObject(v: any): v is Record<string, any> {
@@ -215,6 +242,18 @@ function validateHelperUnit(unit: any, label: string, errors: string[]): void {
   }
 }
 
+function validateOptionUnit(unit: any, label: string, errors: string[]): void {
+  for (const key of ["public", "private"] as const) {
+    const v = unit[key];
+    if (v !== undefined && (!Array.isArray(v) || v.some((e: any) => typeof e !== "string"))) {
+      errors.push(`${label}: option unit "${key}" must be an array of option-key strings when provided`);
+    }
+  }
+  if (unit.readShared !== undefined && typeof unit.readShared !== "boolean") {
+    errors.push(`${label}: option unit "readShared" must be a boolean when provided`);
+  }
+}
+
 /**
  * Runtime-validate an imported plugin module. Returns everything Core needs
  * to decide whether the plugin can be used and which protocols it speaks.
@@ -225,13 +264,14 @@ export function validatePluginModule(mod: any, label: string): PluginLoadResult 
   const parsers: ParserUnitV1[] = [];
   const deployers: DeployerUnitV1[] = [];
   const helpers: HelperUnitV1[] = [];
+  const options: OptionUnitV1[] = [];
 
   if (!isObject(mod)) {
     errors.push(
-      `${label}: expected an object exporting { parsers, deployers, helpers } unit arrays (ngwg-*-v1), got ${Array.isArray(mod) ? "an array" : typeof mod}`,
+      `${label}: expected an object exporting { parsers, deployers, helpers, options } unit arrays (ngwg-*-v1), got ${Array.isArray(mod) ? "an array" : typeof mod}`,
     );
   } else {
-    for (const key of ["parsers", "deployers", "helpers"] as const) {
+    for (const key of ["parsers", "deployers", "helpers", "options"] as const) {
       if (!isUnitList(mod[key])) {
         errors.push(`${label}: "${key}" must be an array of unit objects (or omitted)`);
       }
@@ -258,12 +298,19 @@ export function validatePluginModule(mod: any, label: string): PluginLoadResult 
         validateHelperUnit(unit, `${label}[helpers][${i}]`, errors);
         if (errors.length === before) helpers.push(unit);
       });
+      (mod.options ?? []).forEach((unit: any, i: number) => {
+        if (typeof unit?.name !== "string" || !unit.name) errors.push(`${label}[options][${i}]: missing "name"`);
+        if (typeof unit?.version !== "string" || !unit.version) errors.push(`${label}[options][${i}]: missing "version"`);
+        const before = errors.length;
+        validateOptionUnit(unit, `${label}[options][${i}]`, errors);
+        if (errors.length === before) options.push(unit);
+      });
     }
   }
 
-  if (parsers.length === 0 && deployers.length === 0 && helpers.length === 0 && errors.length === 0) {
+  if (parsers.length === 0 && deployers.length === 0 && helpers.length === 0 && options.length === 0 && errors.length === 0) {
     errors.push(
-      `${label}: module implements none of the known protocols (${KNOWN_PROTOCOLS.join(", ")}) — export a non-empty parsers/deployers/helpers array`,
+      `${label}: module implements none of the known protocols (${KNOWN_PROTOCOLS.join(", ")}) — export a non-empty parsers/deployers/helpers/options array`,
     );
   }
 
@@ -271,15 +318,17 @@ export function validatePluginModule(mod: any, label: string): PluginLoadResult 
   if (parsers.length > 0) protocols.push(PARSER_PROTOCOL);
   if (deployers.length > 0) protocols.push(DEPLOYER_PROTOCOL);
   if (helpers.length > 0) protocols.push(HELPER_PROTOCOL);
+  if (options.length > 0) protocols.push(OPTION_PROTOCOL);
 
   return {
     ok: errors.length === 0 && protocols.length > 0,
     protocols,
-    unitNames: [...parsers, ...deployers, ...helpers].map((u) => u.name),
+    unitNames: [...parsers, ...deployers, ...helpers, ...options].map((u) => u.name),
     errors,
     module: isObject(mod) ? (mod as PluginModule) : undefined,
     parsers,
     deployers,
     helpers,
+    options,
   };
 }

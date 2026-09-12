@@ -47,11 +47,11 @@ are fetched automatically into <root>/.ngwg/ on first use. override their
 sources in ngwg.yaml:
 
   Ngwg:
-    core-repo-url: git@github.com:Ngwgers/Ngwg-core
-    theme-repo-url: git@github.com:Ngwgers/Ngwg-default-theme
+    core-repo-url: https://github.com/Ngwgers/Ngwg-core
+    theme-repo-url: https://github.com/Ngwgers/Ngwg-default-theme
   plugins:
-    files: git@github.com:Ngwgers/Ngwg-files
-    feature: git@github.com:Ngwgers/Ngwg-feature`;
+    files: https://github.com/Ngwgers/Ngwg-files
+    feature: https://github.com/Ngwgers/Ngwg-feature`;
 
 export interface CliOptions {
   argv: string[];
