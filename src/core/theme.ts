@@ -1,9 +1,14 @@
 // Theme discovery & loading. A theme directory looks like:
 //
 //   theme.yaml        — manifest (name, layouts, plugins, per_page)
-//   layout/*.html     — page layouts
-//   partial/*.html    — reusable partials
+//   layout/*          — page layouts (any extension; the engine that renders
+//                       them is decided by the deployer claiming page tasks)
+//   partial/*         — reusable partials (any extension, same rule)
 //   assets/**         — static files copied verbatim into public/
+//
+// Layout and partial names are the file names WITHOUT extension — a theme
+// may use .html, .pug, .liquid, … freely; the names in theme.yaml `layouts`
+// and `{{> partial }}` references never carry an extension.
 
 import * as path from "node:path";
 import { exists, isDir, readBytes, readText, walkFiles } from "../util/fs.ts";
@@ -79,34 +84,38 @@ export function mergeThemeConfig(base: ThemeConfig, overrides: Record<string, an
   return out as ThemeConfig;
 }
 
-export async function loadTheme(themeRoot: string, overrides?: Record<string, any>): Promise<ThemeObject> {
+export async function loadTheme(themeRoot: string, overrides?: Record<string, any>, declared?: string): Promise<ThemeObject> {
   const config = mergeThemeConfig(await loadThemeConfig(themeRoot), overrides ?? {});
   if (!config.name) throw new ThemeError(`theme.yaml at ${themeRoot} is missing required field "name"`);
+  // errors mention both names: the theme's own name may differ from what the
+  // user declared in ngwg.yaml (a name or a path) — searching for the
+  // declared spelling must not dead-end
+  const label = `"${config.name}"` + (declared && declared !== config.name ? ` (declared as "${declared}")` : "");
 
-  const layouts: Record<string, string> = {};
-  const layoutDir = path.join(themeRoot, "layout");
-  if (await isDir(layoutDir)) {
-    for (const rel of await walkFiles(layoutDir)) {
-      if (!/\.(html|htm)$/.test(rel)) continue;
-      const name = rel.replace(/\.(html|htm)$/, "");
-      trace(`theme: load layout "${name}"`);
-      layouts[name] = await readText(path.join(layoutDir, rel));
+  const collectTemplates = async (dir: string, kind: string): Promise<Record<string, string>> => {
+    const out: Record<string, string> = {};
+    const files: Record<string, string> = {};
+    if (!(await isDir(dir))) return out;
+    for (const rel of await walkFiles(dir)) {
+      const name = path.parse(rel).name;
+      if (out[name] !== undefined) {
+        throw new ThemeError(
+          `theme ${label} has two ${kind} templates named "${name}" (${files[name]} and ${rel}) — template names are file names without extension; keep one file per name`,
+        );
+      }
+      trace(`theme: load ${kind} "${name}" (${rel})`);
+      out[name] = await readText(path.join(dir, rel));
+      files[name] = rel;
     }
-  }
+    return out;
+  };
+
+  const layouts = await collectTemplates(path.join(themeRoot, "layout"), "layout");
   if (Object.keys(layouts).length === 0) {
-    throw new ThemeError(`theme "${config.name}" has no layout/*.html templates`);
+    throw new ThemeError(`theme ${label} has no layout/ templates`);
   }
 
-  const partials: Record<string, string> = {};
-  const partialDir = path.join(themeRoot, "partial");
-  if (await isDir(partialDir)) {
-    for (const rel of await walkFiles(partialDir)) {
-      if (!/\.(html|htm)$/.test(rel)) continue;
-      const name = rel.replace(/\.(html|htm)$/, "");
-      trace(`theme: load partial "${name}"`);
-      partials[name] = await readText(path.join(partialDir, rel));
-    }
-  }
+  const partials = await collectTemplates(path.join(themeRoot, "partial"), "partial");
 
   const assets: ThemeObject["assets"] = [];
   const assetsDir = path.join(themeRoot, "assets");
@@ -124,10 +133,10 @@ export async function loadTheme(themeRoot: string, overrides?: Record<string, an
     if (!layouts[name]) {
       // index is mandatory; others may fall back to "page" then "index"
       if (kind === "index") {
-        throw new ThemeError(`theme "${config.name}" is missing required layout "${name}" (for ${kind})`);
+        throw new ThemeError(`theme ${label} is missing required layout "${name}" (for ${kind})`);
       }
       if (!layouts[layoutMap.page] && !layouts.index) {
-        throw new ThemeError(`theme "${config.name}" has no usable layout for ${kind}`);
+        throw new ThemeError(`theme ${label} has no usable layout for ${kind}`);
       }
     }
   }

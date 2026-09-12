@@ -162,6 +162,12 @@ export interface PluginContext {
   yaml: {
     parse(text: string): any;
   };
+  /**
+   * path relative to the configured source directory (posix separators) —
+   * the canonical way a parser derives SourceObject.relPath from the
+   * absolute filePath it receives
+   */
+  relPath(filePath: string): string;
   events: {
     /** listen to a workflow event (built-in steps or injected custom events) */
     on(name: string, handler: (payload: any) => void | Promise<void>): void;

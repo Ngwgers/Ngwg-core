@@ -109,6 +109,12 @@ export class Engine {
       yaml: {
         parse: (text: string) => parseYaml(text),
       },
+      // canonical relPath for parsers: relative to the configured source
+      // directory (posix separators), read from the config current at call time
+      relPath: (filePath: string) =>
+        path
+          .relative(path.resolve(this.rootDir, engine.currentConfig?.source_dir ?? "source"), filePath)
+          .replace(/\\/g, "/"),
       events: {
         on: (name, handler) => queue.on(name, handler),
         emit: async (name, payload) => {
@@ -207,7 +213,8 @@ export class Engine {
         this.log.debug(`theme overrides applied for "${selector}": ${Object.keys(themeOverrides).join(", ")}`);
       }
       const themeRoot = await resolveThemeDir(selector, this.rootDir, this.opts.defaultTheme);
-      const theme = await loadTheme(themeRoot, themeOverrides);
+      // pass the declared selector so theme errors show what the user wrote
+      const theme = await loadTheme(themeRoot, themeOverrides, selector);
       this.log.info(`theme: ${theme.config.name} (${themeRoot})`);
       this._pendingThemeRoot = themeRoot;
       this._pendingTheme = theme;
