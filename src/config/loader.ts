@@ -105,6 +105,9 @@ export function validateUserConfig(config: UserConfig, configFile: string): stri
   if (config.public_dir !== undefined && (typeof config.public_dir !== "string" || !config.public_dir.trim())) {
     errors.push(`${configFile}: "public_dir" must be a non-empty string`);
   }
+  if (config.language !== undefined && (typeof config.language !== "string" || !config.language.trim())) {
+    errors.push(`${configFile}: "language" must be a non-empty language tag (e.g. "zh-CN", "en_US")`);
+  }
   if (config.dev_speed !== undefined && typeof config.dev_speed !== "number") {
     errors.push(`${configFile}: "dev_speed" must be a number (KB/s; 0 or negative disables throttling)`);
   }

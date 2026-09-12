@@ -38,6 +38,12 @@ export interface ThemeObject {
   layouts: Record<string, string>;
   /** partial templates (from partial/*.html) */
   partials: Record<string, string>;
+  /**
+   * theme i18n translations (from i18n/<lang>.yaml), keyed by the normalized
+   * language tag (lang_REGION, e.g. "zh_CN") — values are the YAML documents
+   * as parsed (nested maps of strings). Empty when the theme ships none.
+   */
+  i18n: Record<string, Record<string, any>>;
   /** static assets shipped with the theme (from assets/**) */
   assets: { relPath: string; content: Uint8Array }[];
 }
@@ -91,6 +97,13 @@ export interface DeployEnv {
   /** helper functions exposed by ngwg-helper-v1 plugins */
   helpers: Record<string, (...args: any[]) => any>;
   site: SiteData;
+  /**
+   * deployment language, normalized to lang_REGION ("zh_CN") — taken from
+   * `language` in ngwg.yaml or the $NGWG_LANG environment variable;
+   * undefined when the user set neither (the deployer then falls back to the
+   * theme's default_language)
+   */
+  language?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +134,12 @@ export interface UserConfig {
   plugins?: Record<string, string | PluginDeclaration>;
   /** per-plugin options; `plugin.<name>.allowCustomEvent` gates event injection */
   plugin?: Record<string, Record<string, any>>;
+  /**
+   * deployment language for i18n-aware themes ("zh-CN", "zh_CN.UTF-8" and
+   * friends are all accepted and normalized to lang_REGION). Overrides
+   * nothing else; $NGWG_LANG is used when this is absent.
+   */
+  language?: string;
   /** dev server port */
   dev_port?: number;
   /**
@@ -175,6 +194,11 @@ export interface ThemeConfig {
   };
   /** posts per page on index listing (default 10) */
   per_page?: number;
+  /**
+   * language used when the user set neither `language` nor $NGWG_LANG —
+   * must match an i18n/<lang>.yaml file name of this theme
+   */
+  default_language?: string;
 }
 
 // ---------------------------------------------------------------------------

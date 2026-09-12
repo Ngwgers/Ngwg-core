@@ -4,6 +4,8 @@
 //   layout/*          — page layouts (any extension; the engine that renders
 //                       them is decided by the deployer claiming page tasks)
 //   partial/*         — reusable partials (any extension, same rule)
+//   i18n/<lang>.yaml  — optional translation strings per language; file names
+//                       are normalized language tags (zh_CN.yaml, en_US.yaml)
 //   assets/**         — static files copied verbatim into public/
 //
 // Layout and partial names are the file names WITHOUT extension — a theme
@@ -14,6 +16,8 @@ import * as path from "node:path";
 import { exists, isDir, readBytes, readText, walkFiles } from "../util/fs.ts";
 import { trace } from "../util/log.ts";
 import { loadThemeConfig } from "../config/loader.ts";
+import { parseYaml } from "../config/yaml.ts";
+import { normalizeLanguage } from "./i18n.ts";
 import type { ThemeConfig, ThemeObject } from "../types.ts";
 
 export class ThemeError extends Error {}
@@ -117,6 +121,42 @@ export async function loadTheme(themeRoot: string, overrides?: Record<string, an
 
   const partials = await collectTemplates(path.join(themeRoot, "partial"), "partial");
 
+  // i18n translation files: i18n/<lang>.yaml — the file name is the language
+  // tag (normalized to lang_REGION); the document is the string table handed
+  // to the deployer. i18n is optional: themes without translations just get
+  // an empty map.
+  const i18n: ThemeObject["i18n"] = {};
+  const i18nDir = path.join(themeRoot, "i18n");
+  if (await isDir(i18nDir)) {
+    for (const rel of await walkFiles(i18nDir)) {
+      const ext = path.extname(rel);
+      if (ext !== ".yaml" && ext !== ".yml") continue;
+      const lang = normalizeLanguage(path.basename(rel, ext));
+      if (!lang) {
+        throw new ThemeError(
+          `theme ${label} has an i18n file with an invalid language name: i18n/${rel} — ` +
+            `name it <lang>_<REGION>.yaml (e.g. zh_CN.yaml, en_US.yaml)`,
+        );
+      }
+      if (i18n[lang] !== undefined) {
+        throw new ThemeError(
+          `theme ${label} has two i18n files for language "${lang}" — keep one file per language`,
+        );
+      }
+      let doc: any;
+      try {
+        doc = parseYaml(await readText(path.join(i18nDir, rel)));
+      } catch (e) {
+        throw new ThemeError(`failed to parse theme ${label} i18n/${rel}: ${(e as Error).message}`);
+      }
+      if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+        throw new ThemeError(`theme ${label} i18n/${rel}: top level must be a YAML map of translation strings`);
+      }
+      trace(`theme: load i18n "${lang}" (${rel})`);
+      i18n[lang] = doc;
+    }
+  }
+
   const assets: ThemeObject["assets"] = [];
   const assetsDir = path.join(themeRoot, "assets");
   if (await isDir(assetsDir)) {
@@ -141,7 +181,7 @@ export async function loadTheme(themeRoot: string, overrides?: Record<string, an
     }
   }
 
-  return { config, root: themeRoot, layouts, partials, assets };
+  return { config, root: themeRoot, layouts, partials, i18n, assets };
 }
 
 export function themeLayoutMap(theme: ThemeObject): Record<string, string> {

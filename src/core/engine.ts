@@ -30,6 +30,7 @@ import {
 } from "../plugin/loader.ts";
 import { matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plugin/protocol.ts";
 import { loadTheme, resolveThemeDir, ThemeError } from "./theme.ts";
+import { normalizeLanguage } from "./i18n.ts";
 import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
 import type { DeployEnv, PluginContext, PluginOptions, RenderTask, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
@@ -455,12 +456,19 @@ export class Engine {
     }
 
     const tasks = buildRenderTasks(st.data, st.theme, [...st.sources.values()].filter((s) => s.kind === "asset"), publicDir, this.helperMap);
+    // deployment language: user config wins over the $NGWG_LANG environment
+    // variable; absent both, the deployer falls back to the theme's own
+    // default_language. Normalized to lang_REGION ("zh_CN").
+    const rawLanguage = st.config.language ?? process.env.NGWG_LANG;
+    const language = normalizeLanguage(rawLanguage) || undefined;
+    if (language) this.log.info(`language: ${language}`);
     const env: DeployEnv = {
       rootDir: this.rootDir,
       publicDir,
       theme: st.theme,
       helpers: this.helperMap,
       site: st.data,
+      language,
     };
 
     await rimraf(publicDir);
