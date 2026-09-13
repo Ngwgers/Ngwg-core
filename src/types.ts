@@ -137,9 +137,14 @@ export interface UserConfig {
   themes?: Record<string, string | ThemeDeclaration>;
   source_dir?: string;
   public_dir?: string;
-  /** plugin name -> URL/path — or a declaration object with options */
+  /** plugin key -> URL/path — or a declaration object with options/security */
   plugins?: Record<string, string | PluginDeclaration>;
-  /** per-plugin options; `plugin.<name>.allowCustomEvent` gates event injection */
+  /**
+   * per-plugin settings visible to all plugins (`plugin.<name>.<key>`); the
+   * allowCustomEvent trust switch lives in `plugins.<key>.security` instead —
+   * a allowCustomEvent here is a validation error. Keep secrets out of this
+   * section (it is readable by every plugin via ctx.config).
+   */
   plugin?: Record<string, Record<string, any>>;
   /**
    * deployment language for i18n-aware themes ("zh-CN", "zh_CN.UTF-8" and
@@ -183,6 +188,12 @@ export interface PluginDeclaration {
    * can read. Exposure is gated by the plugin implementing ngwg-option-v1.
    */
   option?: Record<string, any>;
+  /**
+   * security switches for this plugin (keyed by declaration key). The only
+   * switch today is `allowCustomEvent: true`, which lets the plugin inject
+   * custom events into the main workflow (the injectAfter trust gate).
+   */
+  security?: { allowCustomEvent?: boolean };
 }
 
 /**

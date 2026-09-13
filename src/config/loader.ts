@@ -161,6 +161,14 @@ export function validateUserConfig(config: UserConfig, configFile: string, fallb
           } else if ((v as any).option?.private !== undefined && typeof (v as any).option.private !== "object") {
             errors.push(`${configFile}: plugins.${k}.option.private must be a map of private options`);
           }
+          const security = (v as any).security;
+          if (security !== undefined) {
+            if (typeof security !== "object" || security === null || Array.isArray(security)) {
+              errors.push(`${configFile}: plugins.${k}.security must be a map of security switches`);
+            } else if (security.allowCustomEvent !== undefined && typeof security.allowCustomEvent !== "boolean") {
+              errors.push(`${configFile}: plugins.${k}.security.allowCustomEvent must be a boolean`);
+            }
+          }
         } else if (!(hasDefault && v === null)) {
           errors.push(`${configFile}: plugins.${k} must be a URL/path string or a { url, option } map`);
         }
@@ -169,13 +177,19 @@ export function validateUserConfig(config: UserConfig, configFile: string, fallb
   }
   if (config.plugin !== undefined) {
     if (typeof config.plugin !== "object" || config.plugin === null || Array.isArray(config.plugin)) {
-      errors.push(`${configFile}: "plugin" must be a map of { name: { allowCustomEvent: true } }`);
+      errors.push(`${configFile}: "plugin" must be a map of { name: { <plugin settings> } }`);
     } else {
       for (const [name, opts] of Object.entries(config.plugin)) {
         if (typeof opts !== "object" || opts === null) {
           errors.push(`${configFile}: plugin.${name} must be a map of options`);
-        } else if (opts.allowCustomEvent !== undefined && typeof opts.allowCustomEvent !== "boolean") {
-          errors.push(`${configFile}: plugin.${name}.allowCustomEvent must be a boolean`);
+        } else if (opts.allowCustomEvent !== undefined) {
+          // the trust flag moved; silently ignoring it here would look like a
+          // granted trust that never takes effect — fail loudly instead
+          errors.push(
+            `${configFile}: plugin.${name}.allowCustomEvent is no longer read — ` +
+              `move it to plugins.<key>.security.allowCustomEvent under the plugin's ` +
+              `declaration key <key> in ngwg.yaml, then rerun ngwg build`,
+          );
         }
       }
     }

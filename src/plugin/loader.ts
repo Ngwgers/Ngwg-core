@@ -386,10 +386,10 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
 
   // --- pass 2: contexts (with complete shared options), onLoad, registration
   for (const { key, url, option, pluginRoot, manifest, result } of pending) {
-    // trust gate for custom event injection: plugin.<name>.allowCustomEvent
-    const trusted =
-      config.plugin?.[manifest.name]?.allowCustomEvent === true ||
-      config.plugin?.[key]?.allowCustomEvent === true;
+    // trust gate for custom event injection: plugins.<key>.security.allowCustomEvent,
+    // keyed by the plugin's declaration key in ngwg.yaml (not the manifest name,
+    // which the plugin itself controls)
+    const trusted = (config.plugins?.[key] as any)?.security?.allowCustomEvent === true;
     if (trusted) queue.trustPlugin(manifest.name);
 
     const surface = optionSurfaces.get(manifest.name);

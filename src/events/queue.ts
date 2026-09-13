@@ -7,7 +7,8 @@
 // (injectAfter), which is how plugins extend the main workflow.
 //
 // Trust rule: injectAfter throws unless the calling plugin was explicitly
-// trusted by the user with `plugin.<name>.allowCustomEvent: true`.
+// trusted by the user with `plugins.<key>.security.allowCustomEvent: true`
+// (key = the plugin's declaration key in ngwg.yaml).
 
 export interface QueuedEvent {
   name: string;
@@ -22,8 +23,8 @@ export class EventInjectionDenied extends Error {
   constructor(plugin: string) {
     super(
       `plugin "${plugin}" tried to inject a custom event into the main workflow, ` +
-        `but it is not trusted. Add \`plugin.${plugin}.allowCustomEvent: true\` to ngwg.yaml ` +
-        `if you trust this plugin.`,
+        `but it is not trusted. Add \`plugins.<key>.security.allowCustomEvent: true\` ` +
+        `under the plugin's declaration key <key> in ngwg.yaml if you trust this plugin.`,
     );
   }
 }
