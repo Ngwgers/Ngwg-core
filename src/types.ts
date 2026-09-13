@@ -170,7 +170,11 @@ export interface ThemeDeclaration {
  * plain URL string or an object of this shape.
  */
 export interface PluginDeclaration {
-  /** where to fetch/load the plugin from (same semantics as the string form) */
+  /**
+   * where to fetch/load the plugin from (same semantics as the string form).
+   * Optional at runtime for plugins with an injected default source
+   * (files/feature): a url-less declaration falls back to that source.
+   */
   url: string;
   /**
    * options for the plugin. Top-level keys are public candidates (shareable
@@ -225,6 +229,14 @@ export interface PluginContext {
   coreVersion: string;
   /** project root (the directory containing ngwg.yaml) */
   rootDir: string;
+  /**
+   * projected user config: every `plugins.<key>.option` surface is stripped
+   * (options flow only through ctx.options, gated by ngwg-option-v1) so a
+   * plugin can never read another plugin's options — including option.private
+   * secrets — here. The `plugin.<name>` settings section remains visible;
+   * keep secrets out of it. Everything else (title, baseurl, theme, …) is
+   * the full user config.
+   */
   config: UserConfig;
   trusted: boolean;
   log: {

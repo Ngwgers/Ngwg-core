@@ -104,7 +104,7 @@ export class Engine {
       coreVersion: CORE_VERSION,
       rootDir: this.rootDir,
       get config() {
-        return engine.currentConfig!;
+        return engine.pluginConfigView();
       },
       trusted,
       log: {
@@ -200,7 +200,9 @@ export class Engine {
     });
 
     q.on(Steps.CONFIG_VALIDATE, async () => {
-      const errors = validateUserConfig(this.currentConfig!, this._pendingConfigFile!);
+      // keys with an injected default source (files/feature) may omit the URL
+      const fallbackKeys = new Set(Object.keys(this.opts.defaultPlugins ?? {}));
+      const errors = validateUserConfig(this.currentConfig!, this._pendingConfigFile!, fallbackKeys);
       if (errors.length > 0) {
         throw new ConfigError("invalid configuration:\n  " + errors.join("\n  "));
       }
@@ -329,6 +331,31 @@ export class Engine {
   }
 
   private currentConfig: UserConfig | null = null;
+  private configView: { src: UserConfig; view: UserConfig } | null = null;
+
+  /**
+   * UserConfig as seen by plugins: every plugin declaration's `option` surface
+   * is stripped. ngwg-option-v1 (ctx.options) is the only channel through
+   * which plugin options flow — without this projection any plugin could read
+   * other plugins' options, including option.private secrets, off ctx.config.
+   * The `plugin.<name>` per-plugin settings section stays visible (plugins
+   * like ext-seo read their own entry there); it must not hold secrets.
+   */
+  private pluginConfigView(): UserConfig {
+    const cfg = this.currentConfig;
+    if (!cfg) return cfg!;
+    if (this.configView?.src === cfg) return this.configView.view;
+    const view = { ...cfg } as Record<string, any>;
+    if (view.plugins && typeof view.plugins === "object") {
+      const plugins: Record<string, any> = {};
+      for (const [k, v] of Object.entries(view.plugins)) {
+        plugins[k] = typeof v === "string" ? v : { url: (v as any)?.url };
+      }
+      view.plugins = plugins;
+    }
+    this.configView = { src: cfg, view: view as UserConfig };
+    return view as UserConfig;
+  }
   private _pendingConfigFile: string | null = null;
   private _pendingThemeRoot: string | null = null;
   private _pendingTheme: ThemeObject | null = null;

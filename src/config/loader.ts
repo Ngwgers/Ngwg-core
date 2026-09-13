@@ -67,8 +67,13 @@ export async function loadThemeConfig(themeRoot: string): Promise<ThemeConfig> {
 /**
  * Step 3: schema validation. Required fields are enforced; unknown top-level
  * fields are tolerated (plugins may read extra options from config.plugin).
+ *
+ * `fallbackPluginKeys` lists plugin keys for which the caller can inject a
+ * default source (the CLI passes the official files/feature keys here):
+ * declarations for those keys may omit the URL — the plugin loader falls
+ * back to the injected source.
  */
-export function validateUserConfig(config: UserConfig, configFile: string): string[] {
+export function validateUserConfig(config: UserConfig, configFile: string, fallbackPluginKeys?: ReadonlySet<string>): string[] {
   const errors: string[] = [];
 
   if (typeof config.title !== "string" || !config.title.trim()) {
@@ -139,10 +144,13 @@ export function validateUserConfig(config: UserConfig, configFile: string): stri
       errors.push(`${configFile}: "plugins" must be a map of { name: url-or-declaration }`);
     } else {
       for (const [k, v] of Object.entries(config.plugins)) {
+        // keys with an injected default source tolerate a url-less
+        // declaration (option-only maps, empty values)
+        const hasDefault = fallbackPluginKeys?.has(k) ?? false;
         if (typeof v === "string") {
-          if (!v.trim()) errors.push(`${configFile}: plugins.${k} must be a URL or path string`);
+          if (!v.trim() && !hasDefault) errors.push(`${configFile}: plugins.${k} must be a URL or path string`);
         } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-          if (typeof (v as any).url !== "string" || !(v as any).url.trim()) {
+          if ((typeof (v as any).url !== "string" || !(v as any).url.trim()) && !hasDefault) {
             errors.push(`${configFile}: plugins.${k}.url must be a URL or path string`);
           }
           if (
@@ -153,7 +161,7 @@ export function validateUserConfig(config: UserConfig, configFile: string): stri
           } else if ((v as any).option?.private !== undefined && typeof (v as any).option.private !== "object") {
             errors.push(`${configFile}: plugins.${k}.option.private must be a map of private options`);
           }
-        } else {
+        } else if (!(hasDefault && v === null)) {
           errors.push(`${configFile}: plugins.${k} must be a URL/path string or a { url, option } map`);
         }
       }

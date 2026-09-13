@@ -268,15 +268,35 @@ export interface LoadAllResult {
 export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResult> {
   const { rootDir, config, themeConfig, log, queue } = opts;
 
-  const asDeclaration = (v: string | PluginDeclaration): { url: string; option?: Record<string, any> } =>
-    typeof v === "string" ? { url: v } : { url: v.url, option: v.option };
+  const asDeclaration = (v: string | PluginDeclaration | null | undefined): { url?: string; option?: Record<string, any> } => {
+    const raw = typeof v === "string" ? v : (v as PluginDeclaration | null | undefined)?.url;
+    return {
+      url: typeof raw === "string" && raw.trim() ? raw.trim() : undefined,
+      option: typeof v === "object" && v !== null ? (v as PluginDeclaration).option : undefined,
+    };
+  };
 
   // merge declarations. Order matters: it decides the claim priority of
   // parser/deployer units. User config first, then theme required (user wins
   // value conflicts), then caller defaults — i.e. 用户声明 → 主题声明 → must-load
   // 兜底; within a plugin, units keep their own array order.
   const declarations: Record<string, { url: string; option?: Record<string, any> }> = {};
-  for (const [k, v] of Object.entries(config.plugins ?? {})) declarations[k] = asDeclaration(v);
+  for (const [k, v] of Object.entries(config.plugins ?? {})) {
+    const d = asDeclaration(v);
+    if (d.url) {
+      declarations[k] = { url: d.url, option: d.option };
+      continue;
+    }
+    // url-less declaration of an injected default plugin (files/feature):
+    // fall back to the official source, keeping any declared options
+    const fallback = opts.defaultPlugins?.[k];
+    if (!fallback) {
+      throw new PluginLoadError(
+        `plugin "${k}" has no source URL. Declare plugins.${k}: <url-or-path> or { url, option } in ngwg.yaml.`,
+      );
+    }
+    declarations[k] = { url: fallback, option: d.option };
+  }
   for (const [k, v] of Object.entries(themeConfig?.plugins?.required ?? {})) {
     if (typeof v !== "string") throw new PluginLoadError(`theme config: plugin "${k}" needs a URL string`);
     if (!declarations[k]) declarations[k] = { url: v };

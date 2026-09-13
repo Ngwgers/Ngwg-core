@@ -147,6 +147,9 @@ export async function startDevServer(opts: DevOptions): Promise<DevHandle> {
 
   const server = Bun.serve({
     port: opts.port ?? 4000,
+    // loopback only: the dev server serves raw build output and must never be
+    // reachable from the network (no auth, no Host/Origin checks)
+    hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
 
@@ -166,9 +169,20 @@ export async function startDevServer(opts: DevOptions): Promise<DevHandle> {
       if (!st) return new Response("ngwg: no build state (check the terminal for errors)", { status: 503 });
       const publicDir = path.resolve(rootDir, st.config.public_dir ?? "public");
 
-      let rel = decodeURIComponent(url.pathname);
+      let rel: string;
+      try {
+        rel = decodeURIComponent(url.pathname);
+      } catch {
+        return new Response("400 Bad Request", { status: 400 });
+      }
       if (rel.endsWith("/")) rel += "index.html";
       let file = path.join(publicDir, rel);
+      // containment: URL-encoded "../" (e.g. /..%2f..%2fetc%2fpasswd) survives
+      // URL parsing and must never escape publicDir
+      const resolved = path.resolve(file);
+      if (resolved !== publicDir && !resolved.startsWith(publicDir + path.sep)) {
+        return new Response("403 Forbidden", { status: 403 });
+      }
       if (!(await exists(file))) {
         // directory-style URLs without trailing slash
         if (await exists(file + ".html")) file += ".html";
