@@ -13,19 +13,9 @@ Fish 插件管理脚本。
 
 ## 命令行
 
-Core 不直接提供 CLI（见 Ngwg-cli），但插件管理脚本在这里：
-
-```fish
-fish scripts/ngwg-plugins.fish install <name> <url> [root]
-fish scripts/ngwg-plugins.fish install-all [root]
-fish scripts/ngwg-plugins.fish update <name> [root]
-fish scripts/ngwg-plugins.fish update-all [root]
-fish scripts/ngwg-plugins.fish list [root]
-fish scripts/ngwg-plugins.fish remove <name> [root]
-fish scripts/ngwg-plugins.fish path [root]
-```
-
-Core 在构建时发现插件缺失会自动调用该脚本抓取安装。
+Core 不直接提供 CLI（见 Ngwg-cli）；插件管理脚本属于 Ngwg-cli
+（`lib/ngwg-plugins.fish`），Core 在构建时发现插件缺失会通过注入的脚本路径
+自动调用它抓取安装。
 
 文档：[Ngwg-docs](../Ngwg-docs/core-development.md)。
 
@@ -52,19 +42,7 @@ The core library of Ngwg: event queue, nine-step build pipeline, dev server daem
 
 ## Command Line
 
-Core does not ship a CLI itself (see Ngwg-cli), but the plugin management scripts live here:
-
-```fish
-fish scripts/ngwg-plugins.fish install <name> <url> [root]
-fish scripts/ngwg-plugins.fish install-all [root]
-fish scripts/ngwg-plugins.fish update <name> [root]
-fish scripts/ngwg-plugins.fish update-all [root]
-fish scripts/ngwg-plugins.fish list [root]
-fish scripts/ngwg-plugins.fish remove <name> [root]
-fish scripts/ngwg-plugins.fish path [root]
-```
-
-When Core finds missing plugins during a build it automatically invokes this script to fetch and install them.
+Core does not ship a CLI itself (see Ngwg-cli); the plugin management script belongs to Ngwg-cli (`lib/ngwg-plugins.fish`). When Core finds missing plugins during a build it invokes it automatically through the injected script path.
 
 Documentation: [Ngwg-docs](../Ngwg-docs/core-development.md).
 
