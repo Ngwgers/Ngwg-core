@@ -84,7 +84,7 @@ export class EventQueue {
     else this.queue.push(item);
   }
 
-  /** Plugins trusted for custom event injection (names only). */
+  /** Plugins trusted for custom event injection */
   private trustedPlugins = new Set<string>();
 
   trustPlugin(plugin: string) {
@@ -105,7 +105,7 @@ export class EventQueue {
   }
 }
 
-// Canonical workflow step names. Plugins can reference these in injectAfter.
+// Workflow step names. Plugins can reference these in injectAfter.
 export const Steps = {
   START: "build:start",
   CONFIG_CHECK: "config:check",

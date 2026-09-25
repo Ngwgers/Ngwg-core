@@ -2,7 +2,11 @@
 // These types describe the data that flows through the build pipeline:
 // source files -> SourceObject -> SiteData -> RenderTask -> public/ output.
 
-/** A single file inside the user's source directory, converted by a parser plugin. */
+/** 
+ * Single file inside the user's source directory.
+ * 
+ * converted by parser plugin.
+ *  */
 export interface SourceObject {
   /** absolute path of the source file */
   path: string;
@@ -19,9 +23,9 @@ export interface SourceObject {
   /** rendered HTML body when the parser produces one */
   html?: string;
   /**
-   * rendered HTML of the part before the `<!-- more -->` marker — the
-   * excerpt (前言/摘要) shown on listing pages. Absent when the post has
-   * no marker (themes fall back to an auto-generated plain excerpt).
+   * rendered HTML of the part before the `<!-- more -->` marker 
+   * (the excerpt/foreword) shown on listing pages.
+   * Absent when the post has no marker (themes fall back to an auto-generated plain excerpt).
    */
   excerptHtml?: string;
   /** binary payload for asset files that are copied verbatim */
@@ -39,9 +43,11 @@ export interface ThemeObject {
   /** partial templates (from partial/*.html) */
   partials: Record<string, string>;
   /**
-   * theme i18n translations (from i18n/<lang>.yaml), keyed by the normalized
-   * language tag (lang_REGION, e.g. "zh_CN") — values are the YAML documents
-   * as parsed (nested maps of strings). Empty when the theme ships none.
+   * theme i18n translations (from i18n/<lang>.yaml)
+   * 
+   * keyed by the normalized language tag (lang_REGION, e.g. "zh_CN").
+   * 
+   * Values are the YAML documents as parsed (nested maps of strings). Empty when the theme ships none.
    */
   i18n: Record<string, Record<string, any>>;
   /** static assets shipped with the theme (from assets/**) */

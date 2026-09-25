@@ -5,8 +5,6 @@
 //   await build("/path/to/site");              // one-shot build (steps 1-9)
 //   await startDevServer({ rootDir, port });   // dev daemon with live-reload
 //
-// Everything else (Engine, EventQueue, plugin protocols) is exported for
-// advanced use and for tests.
 
 export * from "./types.ts";
 export { EventQueue, Steps, EventInjectionDenied } from "./events/queue.ts";
@@ -40,8 +38,8 @@ export {
   findConfigFile,
   ConfigError,
 } from "./config/loader.ts";
-// theme management (store layout + declared-source resolution) — used by the
-// CLI's update/install commands through this public surface only
+// theme management (store layout + declared-source resolution)
+// used by the CLI's update/install commands through this public surface only
 export {
   resolveThemeDir,
   loadTheme,
@@ -65,7 +63,7 @@ export { Pool, PoolAborted } from "./util/pool.ts";
 import { Engine, type EngineOptions } from "./core/engine.ts";
 import { Logger } from "./util/log.ts";
 
-/** Run one full build (pipeline steps 1-9) for the site rooted at rootDir. */
+// Run one full build (pipeline steps 1-9) for the site rooted at rootDir.
 export async function build(
   rootDir: string,
   opts: EngineOptions & { log?: Logger } = {},
