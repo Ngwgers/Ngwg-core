@@ -21,8 +21,21 @@ function outPath(publicDir: string, url: string): string {
   return path.join(publicDir, url.replace(/^\//, ""), "index.html");
 }
 
-export function pageContext(site: SiteData, page: any, helpers: Record<string, any>): Record<string, any> {
-  return { site, page, h: helpers, config: site };
+/**
+ * Root render context for a page task.
+ *
+ * `theme` is the merged theme config (theme.yaml + declaration options + the
+ * user's `theme.<name>` overrides) — themes read their own settings from it
+ * (`theme.profile.name`, `theme.banner.title`, …) without Core knowing any of
+ * those keys. `config` is kept as an alias of the site data for older themes.
+ */
+export function pageContext(
+  site: SiteData,
+  page: any,
+  helpers: Record<string, any>,
+  themeConfig: Record<string, any> = {},
+): Record<string, any> {
+  return { site, page, h: helpers, config: site, theme: themeConfig };
 }
 
 export function buildRenderTasks(
@@ -56,12 +69,12 @@ export function buildRenderTasks(
   // posts — including hidden ones: a hidden post keeps its own page (it must
   // stay reachable at its URL) but appears in no listing built from site.posts
   for (const post of [...site.posts, ...(site.hiddenPosts ?? [])]) {
-    addTask(pageTask(post.url, post.meta.layout ?? layouts.post, pageContext(site, post, helpers)));
+    addTask(pageTask(post.url, post.meta.layout ?? layouts.post, pageContext(site, post, helpers, theme.config as Record<string, any>)));
   }
 
   // regular pages
   for (const page of site.pages) {
-    addTask(pageTask(page.url, page.meta.layout ?? layouts.page, pageContext(site, page, helpers)));
+    addTask(pageTask(page.url, page.meta.layout ?? layouts.page, pageContext(site, page, helpers, theme.config as Record<string, any>)));
   }
 
   // index with pagination: /, /page/2/, ... (page 1 yields to an explicit
@@ -81,6 +94,7 @@ export function buildRenderTasks(
           { ...site, posts: slice },
           { posts: slice, pagination: { current: pageNum, total: pageCount, prev, next } },
           helpers,
+          theme.config as Record<string, any>,
         ),
       ),
     );
@@ -91,16 +105,16 @@ export function buildRenderTasks(
     ...g,
     url: `/archives/#${slugify(g.name)}`,
   }));
-  addTask(pageTask("/archives/", layouts.archive, pageContext({ ...site, archives: groups }, { archives: groups }, helpers)));
+  addTask(pageTask("/archives/", layouts.archive, pageContext({ ...site, archives: groups }, { archives: groups }, helpers, theme.config as Record<string, any>)));
 
   // tag pages: /tags/<slug>/ (raw UTF-8 slug — matches template hrefs)
   for (const [tag, posts] of Object.entries(site.tags)) {
-    addTask(pageTask(`/tags/${slugify(tag)}/`, layouts.tag, pageContext(site, { tag, posts }, helpers)));
+    addTask(pageTask(`/tags/${slugify(tag)}/`, layouts.tag, pageContext(site, { tag, posts }, helpers, theme.config as Record<string, any>)));
   }
 
   // category pages: /categories/<slug>/
   for (const [cat, posts] of Object.entries(site.categories)) {
-    addTask(pageTask(`/categories/${slugify(cat)}/`, layouts.category, pageContext(site, { category: cat, posts }, helpers)));
+    addTask(pageTask(`/categories/${slugify(cat)}/`, layouts.category, pageContext(site, { category: cat, posts }, helpers, theme.config as Record<string, any>)));
   }
 
   // theme assets
