@@ -5,7 +5,7 @@
 
 import * as path from "node:path";
 import type { RenderTask, SiteData, SourceObject, ThemeObject } from "../types.ts";
-import { themeLayoutMap } from "./theme.ts";
+import { themeLayoutExt, themeLayoutMap } from "./theme.ts";
 
 export function slugify(s: string): string {
   return (
@@ -44,23 +44,24 @@ export function buildRenderTasks(
   const layouts = themeLayoutMap(theme);
   const perPage = Math.max(1, theme.config.per_page ?? 10);
 
+  // page task: carries the layout's source extension so deployers can be
+  // dispatched by suffix (an .ejs layout → the EJS deployer, …)
+  const pageTask = (url: string, templateName: string, context: Record<string, any>): RenderTask => ({
+    outPath: outPath(publicDir, url),
+    template: templateName,
+    templateExt: themeLayoutExt(theme, templateName),
+    context,
+  });
+
   // posts — including hidden ones: a hidden post keeps its own page (it must
   // stay reachable at its URL) but appears in no listing built from site.posts
   for (const post of [...site.posts, ...(site.hiddenPosts ?? [])]) {
-    addTask({
-      outPath: outPath(publicDir, post.url),
-      template: post.meta.layout ?? layouts.post,
-      context: pageContext(site, post, helpers),
-    });
+    addTask(pageTask(post.url, post.meta.layout ?? layouts.post, pageContext(site, post, helpers)));
   }
 
   // regular pages
   for (const page of site.pages) {
-    addTask({
-      outPath: outPath(publicDir, page.url),
-      template: page.meta.layout ?? layouts.page,
-      context: pageContext(site, page, helpers),
-    });
+    addTask(pageTask(page.url, page.meta.layout ?? layouts.page, pageContext(site, page, helpers)));
   }
 
   // index with pagination: /, /page/2/, ... (page 1 yields to an explicit
@@ -72,15 +73,17 @@ export function buildRenderTasks(
     // next = older posts, prev = newer posts
     const prev = n > 1 ? (n - 1 === 1 ? "/" : `/page/${n - 1}/`) : null;
     const next = n < pageCount ? `/page/${n + 1}/` : null;
-    addTask({
-      outPath: outPath(publicDir, n === 1 ? "/" : `/page/${n}/`),
-      template: layouts.index,
-      context: pageContext(
-        { ...site, posts: slice },
-        { posts: slice, pagination: { current: pageNum, total: pageCount, prev, next } },
-        helpers,
+    addTask(
+      pageTask(
+        n === 1 ? "/" : `/page/${n}/`,
+        layouts.index,
+        pageContext(
+          { ...site, posts: slice },
+          { posts: slice, pagination: { current: pageNum, total: pageCount, prev, next } },
+          helpers,
+        ),
       ),
-    });
+    );
   }
 
   // archives: /archives/
@@ -88,28 +91,16 @@ export function buildRenderTasks(
     ...g,
     url: `/archives/#${slugify(g.name)}`,
   }));
-  addTask({
-    outPath: outPath(publicDir, "/archives/"),
-    template: layouts.archive,
-    context: pageContext({ ...site, archives: groups }, { archives: groups }, helpers),
-  });
+  addTask(pageTask("/archives/", layouts.archive, pageContext({ ...site, archives: groups }, { archives: groups }, helpers)));
 
   // tag pages: /tags/<slug>/ (raw UTF-8 slug — matches template hrefs)
   for (const [tag, posts] of Object.entries(site.tags)) {
-    addTask({
-      outPath: outPath(publicDir, `/tags/${slugify(tag)}/`),
-      template: layouts.tag,
-      context: pageContext(site, { tag, posts }, helpers),
-    });
+    addTask(pageTask(`/tags/${slugify(tag)}/`, layouts.tag, pageContext(site, { tag, posts }, helpers)));
   }
 
   // category pages: /categories/<slug>/
   for (const [cat, posts] of Object.entries(site.categories)) {
-    addTask({
-      outPath: outPath(publicDir, `/categories/${slugify(cat)}/`),
-      template: layouts.category,
-      context: pageContext(site, { category: cat, posts }, helpers),
-    });
+    addTask(pageTask(`/categories/${slugify(cat)}/`, layouts.category, pageContext(site, { category: cat, posts }, helpers)));
   }
 
   // theme assets

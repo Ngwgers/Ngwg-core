@@ -28,7 +28,7 @@ import {
   type LoadAllResult,
   type LoadedUnit,
 } from "../plugin/loader.ts";
-import { matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plugin/protocol.ts";
+import { deployerClaims, matchExtensions, type DeployerUnitV1, type ParserUnitV1 } from "../plugin/protocol.ts";
 import { loadTheme, resolveThemeDir, resolveDeclaredTheme, declaredThemeLocalDir, declaredThemeOptions, mergeThemeConfig, ThemeError } from "./theme.ts";
 import { normalizeLanguage } from "./i18n.ts";
 import { buildSiteData } from "./data.ts";
@@ -533,8 +533,10 @@ export class Engine {
 
     // Partition tasks among deployer units in claim order (user config →
     // theme required → must-load fallback, flattened per-plugin unit order):
-    // regular units match by declared types/extensions; fallback units get
-    // whatever nobody claimed, after every regular unit had its chance.
+    // regular units match by declared types/extensions, and page tasks may be
+    // further narrowed by the layout's source suffix (templateExtensions);
+    // fallback units get whatever nobody claimed, after every regular unit had
+    // its chance.
     const deployers = st.plugins.deployers;
     const withIndex = deployers.map((d, i) => ({ d, i }));
     const order = [...withIndex.filter((e) => !e.d.unit.fallback), ...withIndex.filter((e) => e.d.unit.fallback)];
@@ -543,15 +545,15 @@ export class Engine {
     for (const task of tasks) {
       const kind: "page" | "asset" = task.copy ? "asset" : "page";
       const ext = path.extname(task.outPath).toLowerCase();
-      const idx = order.find(({ d }) =>
-        !!d.unit.fallback || (d.unit.types ?? []).includes(kind) || matchExtensions(d.unit.extensions).has(ext),
-      );
+      const idx = order.find(({ d }) => deployerClaims(d.unit, kind, ext, task.templateExt));
       if (idx === undefined) orphans.push(task);
       else claimed[idx.i].push(task);
     }
     if (orphans.length > 0) {
       const sample = orphans[0];
-      const covered = deployers.map((d) => `${d.unit.name} (${[...(d.unit.types ?? []), ...(d.unit.extensions ?? [])].join(", ")})`).join("; ");
+      const covered = deployers
+        .map((d) => `${d.unit.name} (${[...(d.unit.types ?? []), ...(d.unit.extensions ?? []), ...(d.unit.templateExtensions ?? [])].join(", ")})`)
+        .join("; ");
       const msg =
         `${orphans.length} render task(s) match no deployer, e.g. "${path.relative(publicDir, sample.outPath)}" ` +
         `(kind: ${sample.copy ? "asset" : "page"}). Deployers loaded: ${covered || "none"}. ` +

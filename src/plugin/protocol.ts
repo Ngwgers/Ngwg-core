@@ -84,6 +84,16 @@ export interface DeployerUnitV1 {
   /** task kinds handled: "page" (layout render) and/or "asset" (verbatim copy) */
   types?: TaskTypeV1[];
   /**
+   * For "page" tasks: the theme layout/partial file extensions this unit can
+   * render, lowercase with dot (e.g. [".ejs", ".mjs"]). The render task carries
+   * the extension of the layout file it was built from, so dispatch happens by
+   * suffix instead of by inspecting template syntax. A unit that omits this
+   * field claims page tasks of *any* layout extension; combined with claim
+   * order that lets a generic engine (e.g. mustache) sit behind a
+   * suffix-specific one (e.g. EJS). Must be combined with `types: ["page"]`.
+   */
+  templateExtensions?: string[];
+  /**
    * catch-all: matches every task no regular deployer claimed. Must not be
    * combined with extensions/types. Deployers are consulted in load order
    * (user config → theme required → must-load fallback, flattened per-plugin
@@ -173,6 +183,34 @@ export function matchExtensions(extensions?: string[], types?: string[], registr
   return set;
 }
 
+/** Lowercase set of a deployer's declared layout template extensions. */
+export function matchTemplateExtensions(list?: string[]): Set<string> {
+  return new Set((list ?? []).map((e) => e.toLowerCase()));
+}
+
+/**
+ * Whether a deployer unit claims a render task. Regular units match by task
+ * kind (`types`) and/or output extension (`extensions`); page tasks add a
+ * second filter — a unit declaring `templateExtensions` only claims layouts
+ * whose source file carries one of those suffixes. Fallback units match
+ * everything (they are consulted last, by the engine).
+ */
+export function deployerClaims(
+  unit: Pick<DeployerUnitV1, "fallback" | "types" | "extensions" | "templateExtensions">,
+  kind: TaskTypeV1,
+  outExt: string,
+  templateExt?: string,
+): boolean {
+  if (unit.fallback) return true;
+  const byType = (unit.types ?? []).includes(kind);
+  const byOut = matchExtensions(unit.extensions).has(outExt);
+  if (!byType && !byOut) return false;
+  if (kind === "page" && unit.templateExtensions && unit.templateExtensions.length > 0) {
+    return templateExt !== undefined && matchTemplateExtensions(unit.templateExtensions).has(templateExt);
+  }
+  return true;
+}
+
 function validateExtensions(list: any, label: string, errors: string[]): boolean {
   if (!Array.isArray(list) || list.some((e: any) => typeof e !== "string" || !e.startsWith("."))) {
     errors.push(`${label}: "extensions" must be an array of dot-prefixed strings (e.g. [".md"])`);
@@ -206,8 +244,8 @@ function validateDeployerUnit(unit: any, label: string, errors: string[]): void 
     return;
   }
   if (unit.fallback === true) {
-    if (unit.extensions !== undefined || unit.types !== undefined) {
-      errors.push(`${label}: a fallback deployer matches everything unclaimed — it must not declare "extensions" or "types"`);
+    if (unit.extensions !== undefined || unit.types !== undefined || unit.templateExtensions !== undefined) {
+      errors.push(`${label}: a fallback deployer matches everything unclaimed — it must not declare "extensions", "types" or "templateExtensions"`);
     }
   } else {
     const hasExt = Array.isArray(unit.extensions) && unit.extensions.length > 0;
@@ -216,6 +254,12 @@ function validateDeployerUnit(unit: any, label: string, errors: string[]): void 
       errors.push(`${label}: deployer unit must declare what it handles — a non-empty "types" array of task kinds (${TASK_TYPES.join(", ")}) and/or a non-empty "extensions" array of output extensions, or "fallback: true"`);
     }
     if (unit.extensions !== undefined && !validateExtensions(unit.extensions, label, errors)) return;
+    if (unit.templateExtensions !== undefined) {
+      if (!validateExtensions(unit.templateExtensions, label, errors)) return;
+      if (!(unit.types ?? []).includes("page")) {
+        errors.push(`${label}: "templateExtensions" describes page layouts — it must be combined with types: ["page"]`);
+      }
+    }
     if (unit.types !== undefined) {
       for (const t of unit.types) {
         if (!TASK_TYPES.includes(t)) {

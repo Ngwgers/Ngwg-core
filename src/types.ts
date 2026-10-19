@@ -40,8 +40,12 @@ export interface ThemeObject {
   root: string;
   /** layout templates, name -> template source (from layout/*.html) */
   layouts: Record<string, string>;
+  /** layout name -> lowercase source extension (".ejs"); "" when the file has none */
+  layoutExts: Record<string, string>;
   /** partial templates (from partial/*.html) */
   partials: Record<string, string>;
+  /** partial name -> lowercase source extension (".ejs"); "" when the file has none */
+  partialExts: Record<string, string>;
   /**
    * theme i18n translations (from i18n/<lang>.yaml)
    * 
@@ -90,6 +94,12 @@ export interface RenderTask {
   outPath: string;
   /** render a named theme layout with `context` */
   template?: string;
+  /**
+   * lowercase extension of the layout source this task was built from
+   * (e.g. ".ejs"); "" when the theme file carries no extension. Deployers
+   * declaring `templateExtensions` are matched against it.
+   */
+  templateExt?: string;
   context?: Record<string, any>;
   /** or copy binary content verbatim (theme/source assets) */
   copy?: { content: Uint8Array };

@@ -212,30 +212,35 @@ export async function loadTheme(themeRoot: string, overrides?: Record<string, an
   // declared spelling must not dead-end
   const label = `"${config.name}"` + (declared && declared !== config.name ? ` (declared as "${declared}")` : "");
 
-  const collectTemplates = async (dir: string, kind: string): Promise<Record<string, string>> => {
-    const out: Record<string, string> = {};
+  const collectTemplates = async (dir: string, kind: string): Promise<{ sources: Record<string, string>; exts: Record<string, string> }> => {
+    const sources: Record<string, string> = {};
+    const exts: Record<string, string> = {};
     const files: Record<string, string> = {};
-    if (!(await isDir(dir))) return out;
+    if (!(await isDir(dir))) return { sources, exts };
     for (const rel of await walkFiles(dir)) {
-      const name = path.parse(rel).name;
-      if (out[name] !== undefined) {
+      const parsed = path.parse(rel);
+      const name = parsed.name;
+      if (sources[name] !== undefined) {
         throw new ThemeError(
           `theme ${label} has two ${kind} templates named "${name}" (${files[name]} and ${rel}) — template names are file names without extension; keep one file per name`,
         );
       }
       trace(`theme: load ${kind} "${name}" (${rel})`);
-      out[name] = await readText(path.join(dir, rel));
+      sources[name] = await readText(path.join(dir, rel));
+      exts[name] = parsed.ext.toLowerCase();
       files[name] = rel;
     }
-    return out;
+    return { sources, exts };
   };
 
-  const layouts = await collectTemplates(path.join(themeRoot, "layout"), "layout");
+  const layoutTemplates = await collectTemplates(path.join(themeRoot, "layout"), "layout");
+  const layouts = layoutTemplates.sources;
   if (Object.keys(layouts).length === 0) {
     throw new ThemeError(`theme ${label} has no layout/ templates`);
   }
 
-  const partials = await collectTemplates(path.join(themeRoot, "partial"), "partial");
+  const partialTemplates = await collectTemplates(path.join(themeRoot, "partial"), "partial");
+  const partials = partialTemplates.sources;
 
   // i18n translation files: i18n/<lang>.yaml — the file name is the language
   // tag (normalized to lang_REGION); the document is the string table handed
@@ -297,11 +302,24 @@ export async function loadTheme(themeRoot: string, overrides?: Record<string, an
     }
   }
 
-  return { config, root: themeRoot, layouts, partials, i18n, assets };
+  return { config, root: themeRoot, layouts, layoutExts: layoutTemplates.exts, partials, partialExts: partialTemplates.exts, i18n, assets };
 }
 
 export function themeLayoutMap(theme: ThemeObject): Record<string, string> {
   return { ...DEFAULT_LAYOUTS, ...(theme.config.layouts ?? {}) };
+}
+
+/**
+ * The source extension of the layout a page task renders with. Mirrors the
+ * deployer's graceful fallback (an unknown page/post layout falls back to
+ * "index") so suffix-based dispatch picks the engine that will actually
+ * render the resolved layout.
+ */
+export function themeLayoutExt(theme: ThemeObject, name: string): string | undefined {
+  const exts = theme.layoutExts ?? {};
+  if (name in exts) return exts[name];
+  for (const fallback of ["page", "index"]) if (fallback in exts) return exts[fallback];
+  return undefined;
 }
 
 /** Check an output file is inside publicDir (guards against path traversal). */
