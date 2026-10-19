@@ -204,13 +204,39 @@ export function mergeThemeConfig(base: ThemeConfig, overrides: Record<string, an
   return out as ThemeConfig;
 }
 
-export async function loadTheme(themeRoot: string, overrides?: Record<string, any>, declared?: string): Promise<ThemeObject> {
+export async function loadTheme(
+  themeRoot: string,
+  overrides?: Record<string, any>,
+  declared?: string,
+  log?: { info(msg: string): void },
+): Promise<ThemeObject> {
   const config = mergeThemeConfig(await loadThemeConfig(themeRoot), overrides ?? {});
   if (!config.name) throw new ThemeError(`theme.yaml at ${themeRoot} is missing required field "name"`);
   // errors mention both names: the theme's own name may differ from what the
   // user declared in ngwg.yaml (a name or a path) — searching for the
   // declared spelling must not dead-end
   const label = `"${config.name}"` + (declared && declared !== config.name ? ` (declared as "${declared}")` : "");
+
+  // themes may declare npm dependencies ("直接使用 npm 包", e.g. icon sets for
+  // EJS templates): install them when node_modules is missing — local
+  // checkouts and store copies alike. Mirrors the plugin loader; the CLI also
+  // installs them right after fetching a theme into the store.
+  const pkgJson = path.join(themeRoot, "package.json");
+  const nodeModules = path.join(themeRoot, "node_modules");
+  if ((await exists(pkgJson)) && !(await exists(nodeModules))) {
+    const raw = await readText(pkgJson);
+    if (raw.includes('"dependencies"')) {
+      log?.info(`theme ${label} has npm dependencies — running bun install`);
+      const res = spawnSync("bun", ["install"], { cwd: themeRoot, encoding: "utf8" });
+      if (res.status !== 0) {
+        throw new ThemeError(
+          `bun install failed in ${themeRoot} (theme ${label} declares npm dependencies in package.json):\n` +
+            `${res.stderr || res.stdout || ""}` +
+            `Fix the theme's package.json, or install its dependencies by hand: cd "${themeRoot}" && bun install`,
+        );
+      }
+    }
+  }
 
   const collectTemplates = async (dir: string, kind: string): Promise<{ sources: Record<string, string>; exts: Record<string, string> }> => {
     const sources: Record<string, string> = {};

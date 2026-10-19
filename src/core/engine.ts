@@ -249,7 +249,7 @@ export class Engine {
         themeOverrides = themeOverrides ? mergeThemeConfig(declOptions, themeOverrides) : declOptions;
       }
       // pass the declared selector so theme errors show what the user wrote
-      const theme = await loadTheme(themeRoot, themeOverrides, selector);
+      const theme = await loadTheme(themeRoot, themeOverrides, selector, this.log);
       this.log.info(`theme: ${theme.config.name} (${themeRoot})`);
       this._pendingThemeRoot = themeRoot;
       this._pendingTheme = theme;
