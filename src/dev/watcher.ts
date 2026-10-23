@@ -31,6 +31,7 @@ export class Watcher {
   private watchers: FSWatcher[] = [];
   private pending = new Map<string, ChangeKind>();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private signature = "";
 
   constructor(
     private roots: WatcherRoots,
@@ -38,11 +39,19 @@ export class Watcher {
     private debounceMs = 120,
   ) {}
 
+  /**
+   * Point the watcher at new roots. A config edit can move the source
+   * directory, the theme or the plugin store, so the watchers are rebuilt when
+   * the target set actually changes (never on plain content edits).
+   */
   updateRoots(roots: WatcherRoots) {
     this.roots = roots;
+    if (this.signatureOf(roots) !== this.signature) this.start();
   }
 
   start() {
+    this.stop();
+    this.signature = this.signatureOf(this.roots);
     const targets: WatchTarget[] = [];
     for (const f of this.roots.configFiles) targets.push({ root: f, kind: "config", file: true });
     if (this.roots.themeRoot) targets.push({ root: this.roots.themeRoot, kind: "theme" });
@@ -86,6 +95,15 @@ export class Watcher {
     }
   }
 
+  private signatureOf(roots: WatcherRoots): string {
+    return [
+      ...roots.configFiles.map((f) => `config:${path.resolve(f)}`),
+      `theme:${roots.themeRoot ? path.resolve(roots.themeRoot) : ""}`,
+      `source:${roots.sourceDir ? path.resolve(roots.sourceDir) : ""}`,
+      ...roots.pluginDirs.map((d) => `plugin:${path.resolve(d)}`),
+    ].join("|");
+  }
+
   private classify(abs: string) {
     let kind: ChangeKind = "other";
     let bestLen = -1;
@@ -119,6 +137,7 @@ export class Watcher {
     this.watchers = [];
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.pending.clear();
   }
 }
 
