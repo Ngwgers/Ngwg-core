@@ -44,25 +44,45 @@ export class Watcher {
 
   start() {
     const targets: WatchTarget[] = [];
-    // watch the config *file* itself — watching its directory would also
-    // pick up public/ writes and cause rebuild loops
     for (const f of this.roots.configFiles) targets.push({ root: f, kind: "config", file: true });
     if (this.roots.themeRoot) targets.push({ root: this.roots.themeRoot, kind: "theme" });
     if (this.roots.sourceDir) targets.push({ root: this.roots.sourceDir, kind: "source" });
     for (const d of this.roots.pluginDirs) targets.push({ root: d, kind: "plugin" });
 
+    // Config files are watched through their directory, filtered to the exact
+    // names: an editor that saves atomically (write a temp file, then rename
+    // over the target) replaces the inode, and a watch on the file itself dies
+    // with it — which silently stopped config reloads after the first save.
+    const configDirs = new Map<string, Set<string>>();
+    for (const t of targets) {
+      if (!t.file) continue;
+      const abs = path.resolve(t.root);
+      const dir = path.dirname(abs);
+      const names = configDirs.get(dir) ?? configDirs.set(dir, new Set()).get(dir)!;
+      names.add(path.basename(abs));
+    }
+    for (const [dir, names] of configDirs) {
+      this.add(dir, { recursive: false }, (name) => {
+        if (!names.has(name)) return;
+        this.classify(path.join(dir, name));
+      });
+    }
+
     // longest prefix wins when roots overlap (e.g. root == theme root)
     for (const t of targets) {
-      try {
-        const w = watch(t.root, { recursive: !t.file }, (_event, filename) => {
-          if (!filename) return;
-          const abs = path.resolve(t.root, filename.toString());
-          this.classify(abs);
-        });
-        this.watchers.push(w);
-      } catch {
-        // directory may not exist (e.g. no plugin store yet) — ignore
-      }
+      if (t.file) continue;
+      this.add(t.root, { recursive: true }, (name) => this.classify(path.resolve(t.root, name)));
+    }
+  }
+
+  private add(root: string, opts: { recursive: boolean }, onEntry: (name: string) => void) {
+    try {
+      const w = watch(root, opts, (_event, filename) => {
+        if (filename) onEntry(filename.toString());
+      });
+      this.watchers.push(w);
+    } catch {
+      // directory may not exist (e.g. no plugin store yet) — ignore
     }
   }
 
