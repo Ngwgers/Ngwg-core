@@ -35,7 +35,7 @@ import { buildSiteData } from "./data.ts";
 import { buildRenderTasks } from "./tasks.ts";
 import type { DeployEnv, PluginContext, PluginOptions, RenderTask, SiteData, SourceObject, ThemeObject, UserConfig } from "../types.ts";
 
-export const CORE_VERSION = "0.2.1";
+export const CORE_VERSION = "0.3.0";
 
 export class RunInterrupted extends Error {
   constructor() {
