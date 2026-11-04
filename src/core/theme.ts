@@ -185,6 +185,8 @@ const DEFAULT_LAYOUTS: Record<string, string> = {
   archive: "archive",
   tag: "tag",
   category: "category",
+  // optional: emitted as /404.html when the theme ships this layout
+  notFound: "404",
 };
 
 /**

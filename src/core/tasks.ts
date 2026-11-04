@@ -77,6 +77,24 @@ export function buildRenderTasks(
     addTask(pageTask(page.url, page.meta.layout ?? layouts.page, pageContext(site, page, helpers, theme.config as Record<string, any>)));
   }
 
+  // 404 — themes opt in by shipping the layout (default name "404"); the file
+  // is written as public/404.html, not a directory, so hosts that look for
+  // /404.html find it. It is deliberately not part of site.pages: sitemaps and
+  // feeds must not advertise the error page.
+  if (theme.layouts[layouts.notFound]) {
+    addTask({
+      outPath: path.join(publicDir, "404.html"),
+      template: layouts.notFound,
+      templateExt: themeLayoutExt(theme, layouts.notFound),
+      context: pageContext(
+        site,
+        { url: "/404.html", kind: "page", meta: { title: "404", noindex: true } },
+        helpers,
+        theme.config as Record<string, any>,
+      ),
+    });
+  }
+
   // index with pagination: /, /page/2/, ... (page 1 yields to an explicit
   // source page that claimed "/")
   const pageCount = Math.max(1, Math.ceil(site.posts.length / perPage));
