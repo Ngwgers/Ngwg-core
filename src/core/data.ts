@@ -36,9 +36,17 @@ export function buildSiteData(
   contexts: Map<string, PluginContext>,
 ): SiteData {
   const all = [...sources.values()];
+  // pinned posts (`pinned: true`) lead every listing; within a group the
+  // usual newest-first date order applies. Prev/next follow this same order,
+  // matching the Astro Firefly reference.
   const allPosts = all
     .filter((s) => s.kind === "post")
-    .sort((a, b) => postDate(b).getTime() - postDate(a).getTime());
+    .sort((a, b) => {
+      const ap = a.meta.pinned === true ? 1 : 0;
+      const bp = b.meta.pinned === true ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return postDate(b).getTime() - postDate(a).getTime();
+    });
   // hidden posts (frontmatter `hidden: true`) stay deployed and reachable at
   // their URL, but every listing (index, tags, categories, archives, RSS,
   // sitemap) is built from the visible list only — their tags/categories are

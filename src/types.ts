@@ -69,7 +69,10 @@ export interface SiteData {
   title: string;
   description: string;
   baseurl: string;
-  /** all posts, sorted by date descending (frontmatter `hidden: true` excluded) */
+  /**
+   * all posts, pinned first (`pinned: true`) then date descending
+   * (frontmatter `hidden: true` excluded)
+   */
   posts: SourceObject[];
   /**
    * hidden posts (`hidden: true`): still deployed and reachable at their URL
