@@ -1,7 +1,7 @@
 // Filesystem helpers built on node:fs/promises (Bun-compatible).
 // Every read/write/delete is traced — visible only at --verbose.
 
-import { mkdir, readdir, readFile, rm, stat, writeFile, copyFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { trace } from "./log.ts";
 
@@ -41,18 +41,6 @@ export async function readBytes(p: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(p));
 }
 
-export async function writeText(p: string, text: string): Promise<void> {
-  trace(`write ${p}`);
-  await ensureDir(path.dirname(p));
-  await writeFile(p, text);
-}
-
-export async function writeBytes(p: string, data: Uint8Array): Promise<void> {
-  trace(`write ${p}`);
-  await ensureDir(path.dirname(p));
-  await writeFile(p, data);
-}
-
 /** Recursively list all files under dir (relative paths, using "/"). */
 export async function walkFiles(dir: string, prefix = ""): Promise<string[]> {
   if (!(await isDir(dir))) return [];
@@ -69,19 +57,6 @@ export async function walkFiles(dir: string, prefix = ""): Promise<string[]> {
   return out;
 }
 
-/** Copy a file, creating parent directories as needed. */
-export async function copyFileTo(src: string, dest: string): Promise<void> {
-  trace(`copy ${src} → ${dest}`);
-  await ensureDir(path.dirname(dest));
-  await copyFile(src, dest);
-}
-
 export function extOf(p: string): string {
   return path.extname(p).toLowerCase();
-}
-
-/** Join a site baseurl and a path safely ("/blog" + "/posts/a/" => "/blog/posts/a/"). */
-export function joinUrl(base: string, p: string): string {
-  if (!base || base === "/") return p;
-  return base.replace(/\/+$/, "") + (p.startsWith("/") ? p : "/" + p);
 }
