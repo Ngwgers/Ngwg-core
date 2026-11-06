@@ -146,7 +146,8 @@ export async function startDevServer(opts: DevOptions): Promise<DevHandle> {
   watcher.start();
 
   const server = Bun.serve({
-    port: opts.port ?? 4000,
+    // CLI --port wins; otherwise the ngwg.yaml `dev_port` field; default 4000
+    port: opts.port ?? engine.state?.config.dev_port ?? 4000,
     // loopback only: the dev server serves raw build output and must never be
     // reachable from the network (no auth, no Host/Origin checks)
     hostname: "127.0.0.1",

@@ -140,6 +140,11 @@ export function createUserConfigSchema(
         message: '"dev_speed" must be a number (KB/s; 0 or negative disables throttling)',
       },
 
+      dev_port: {
+        type: "number",
+        message: '"dev_port" must be a port number (CLI --port wins over it)',
+      },
+
       plugins: {
         type: "record",
         message: '"plugins" must be a map of { name: url-or-declaration }',
