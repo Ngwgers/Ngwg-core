@@ -3,6 +3,7 @@
 // prev/next links. Helper plugins can contribute extra data via buildData().
 
 import type { HelperUnitV1 } from "../plugin/protocol.ts";
+import type { LoadedUnit } from "../plugin/loader.ts";
 import type { PluginContext, SiteData, SourceObject, UserConfig } from "../types.ts";
 import { slugify } from "./tasks.ts";
 
@@ -32,7 +33,7 @@ function toStringArray(v: any): string[] {
 export function buildSiteData(
   config: UserConfig,
   sources: Map<string, SourceObject>,
-  helperPlugins: HelperUnitV1[],
+  helperPlugins: LoadedUnit<HelperUnitV1>[],
   contexts: Map<string, PluginContext>,
 ): SiteData {
   const all = [...sources.values()];
@@ -102,13 +103,13 @@ export function buildSiteData(
   };
 
   for (const helper of helperPlugins) {
-    if (!helper.buildData) continue;
-    const ctx = contexts.get(helper.name);
+    if (!helper.unit.buildData) continue;
+    const ctx = contexts.get(helper.plugin);
     try {
-      const extra = helper.buildData(ctx!, data, posts);
+      const extra = helper.unit.buildData(ctx!, data, posts);
       Object.assign(data.extra, extra && typeof extra === "object" ? extra : {});
     } catch (e) {
-      throw new Error(`helper plugin "${helper.name}" buildData() failed: ${(e as Error).message}`);
+      throw new Error(`helper plugin "${helper.unit.name}" buildData() failed: ${(e as Error).message}`);
     }
   }
 

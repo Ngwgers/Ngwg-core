@@ -1,7 +1,7 @@
 // Plugin protocol definitions and runtime validation.
 //
-// A plugin module's default export is an object with any subset of three
-// *arrays* — `parsers`, `deployers`, `helpers`. Each element is an
+// A plugin module's default export is an object with any subset of four
+// *arrays* — `parsers`, `deployers`, `helpers`, `options`. Each element is an
 // independent, self-contained unit (e.g. a markdown parser or an HTML
 // deployer) that declares which files/tasks it handles:
 //
@@ -9,7 +9,8 @@
 //     parsers:  [markdownParser],          // → ngwg-parser-v1
 //     deployers: [templateDeployer],       // → ngwg-deployer-v1
 //     helpers:  [featureHelpers],          // → ngwg-helper-v1
-//     onLoad(ctx) { … }, onUnload() { … },
+//     options:  [seoOptions],              // → ngwg-option-v1
+//     onLoad(ctx) { … },
 //   };
 //
 // The array a unit appears in determines its protocol; units carry no
@@ -151,14 +152,12 @@ export interface PluginModule {
   helpers?: HelperUnitV1[];
   options?: OptionUnitV1[];
   onLoad?(ctx: PluginContext): void | Promise<void>;
-  onUnload?(): void | Promise<void>;
 }
 
 export interface PluginLoadResult {
   ok: boolean;
   /** which protocols the module implements (empty when invalid) */
   protocols: string[];
-  unitNames: string[];
   errors: string[];
   module?: PluginModule;
   parsers: ParserUnitV1[];
@@ -367,7 +366,6 @@ export function validatePluginModule(mod: any, label: string): PluginLoadResult 
   return {
     ok: errors.length === 0 && protocols.length > 0,
     protocols,
-    unitNames: [...parsers, ...deployers, ...helpers, ...options].map((u) => u.name),
     errors,
     module: isObject(mod) ? (mod as PluginModule) : undefined,
     parsers,

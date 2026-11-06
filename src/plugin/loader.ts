@@ -42,8 +42,6 @@ export interface LoadedPlugin {
   key: string;
   /** url/path as written in the config */
   url: string;
-  /** options from a { url, option } declaration (string declarations have none) */
-  option?: Record<string, any>;
   /** absolute local directory of the plugin */
   root: string;
   manifest: PluginManifest;
@@ -58,10 +56,6 @@ export class PluginLoadError extends Error {
 
 export function pluginStoreDir(rootDir: string): string {
   return process.env.NGWG_PLUGIN_DIR || path.join(rootDir, ".ngwg", "plugins");
-}
-
-function isRemoteUrl(url: string): boolean {
-  return /^https?:\/\//.test(url) || url.startsWith("git@") || url.endsWith(".git");
 }
 
 function localPathFromUrl(url: string, rootDir: string): string | null {
@@ -154,7 +148,6 @@ export async function importPlugin(pluginRoot: string, manifest: PluginManifest,
     return {
       ok: false,
       protocols: [],
-      unitNames: [],
       errors: [`entry "${manifest.entry}" not found in plugin ${manifest.name}`],
       parsers: [],
       deployers: [],
@@ -174,7 +167,6 @@ export async function importPlugin(pluginRoot: string, manifest: PluginManifest,
         return {
           ok: false,
           protocols: [],
-          unitNames: [],
           errors: [`bun install failed in ${pluginRoot}: ${res.stderr || res.stdout}`],
           parsers: [],
           deployers: [],
@@ -191,7 +183,6 @@ export async function importPlugin(pluginRoot: string, manifest: PluginManifest,
     return {
       ok: false,
       protocols: [],
-      unitNames: [],
       errors: [`import failed: ${(e as Error).message}`],
       parsers: [],
       deployers: [],
@@ -249,7 +240,7 @@ export interface LoadAllResult {
   loaded: LoadedPlugin[];
   parsers: LoadedUnit<ParserUnitV1>[];
   deployers: LoadedUnit<DeployerUnitV1>[];
-  helpers: HelperUnitV1[];
+  helpers: LoadedUnit<HelperUnitV1>[];
   /** merged helper namespace exposed to themes as `h` */
   helperMap: Record<string, (...args: any[]) => any>;
 }
@@ -320,12 +311,12 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
   const loaded: LoadedPlugin[] = [];
   const parsers: LoadedUnit<ParserUnitV1>[] = [];
   const deployers: LoadedUnit<DeployerUnitV1>[] = [];
-  const helpers: HelperUnitV1[] = [];
+  const helpers: LoadedUnit<HelperUnitV1>[] = [];
   const helperMap: Record<string, (...args: any[]) => any> = {};
 
   // --- pass 1: resolve, import, compute option surfaces ---------------------
   const optionSurfaces = new Map<string, { self: Record<string, any>; published: Record<string, any>; readShared: boolean }>();
-  const pending: { key: string; url: string; option?: Record<string, any>; pluginRoot: string; manifest: PluginManifest; result: PluginLoadResult }[] = [];
+  const pending: { key: string; url: string; pluginRoot: string; manifest: PluginManifest; result: PluginLoadResult }[] = [];
 
   for (const [key, decl] of Object.entries(declarations)) {
     let pluginRoot: string;
@@ -350,7 +341,7 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
       log.error(msg);
       throw new PluginLoadError(msg);
     }
-    pending.push({ key, url: decl.url, option: decl.option, pluginRoot, manifest, result });
+    pending.push({ key, url: decl.url, pluginRoot, manifest, result });
 
     // ngwg-option-v1: without an options unit the plugin gets NO options at
     // all — user configuration is never handed to it
@@ -385,7 +376,7 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
   }
 
   // --- pass 2: contexts (with complete shared options), onLoad, registration
-  for (const { key, url, option, pluginRoot, manifest, result } of pending) {
+  for (const { key, url, pluginRoot, manifest, result } of pending) {
     // trust gate for custom event injection: plugins.<key>.security.allowCustomEvent,
     // keyed by the plugin's declaration key in ngwg.yaml (not the manifest name,
     // which the plugin itself controls)
@@ -419,14 +410,14 @@ export async function loadAllPlugins(opts: LoadAllOptions): Promise<LoadAllResul
     for (const unit of result.parsers) parsers.push({ plugin: manifest.name, unit });
     for (const unit of result.deployers) deployers.push({ plugin: manifest.name, unit });
     for (const unit of result.helpers) {
-      helpers.push(unit);
+      helpers.push({ plugin: manifest.name, unit });
       for (const [hname, fn] of Object.entries(unit.helpers)) {
         if (helperMap[hname]) log.warn(`helper "${hname}" from plugin ${unit.name} shadows an existing helper`);
         helperMap[hname] = fn;
       }
     }
 
-    loaded.push({ key, url, root: pluginRoot, manifest, result, option });
+    loaded.push({ key, url, root: pluginRoot, manifest, result });
     log.debug(`loaded plugin ${manifest.name} v${manifest.version} [${result.protocols.join(", ")}] from ${pluginRoot}`);
   }
 

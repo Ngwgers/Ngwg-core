@@ -7,7 +7,7 @@
 //
 
 export * from "./types.ts";
-export { EventQueue, Steps, EventInjectionDenied } from "./events/queue.ts";
+export { EventQueue, Steps, EventInjectionDenied, ReservedStepDenied } from "./events/queue.ts";
 export {
   PARSER_PROTOCOL,
   DEPLOYER_PROTOCOL,
@@ -30,7 +30,7 @@ export type {
 } from "./plugin/protocol.ts";
 export { loadAllPlugins, readManifest, resolvePluginDir, pluginStoreDir, PluginLoadError, type LoadedUnit } from "./plugin/loader.ts";
 export { Engine, CORE_VERSION, RunInterrupted } from "./core/engine.ts";
-export { parseYaml, splitFrontmatter } from "./config/yaml.ts";
+export { parseYaml } from "./config/yaml.ts";
 export {
   loadUserConfig,
   loadThemeConfig,

@@ -199,7 +199,7 @@ export interface PluginDeclaration {
    * Optional at runtime for plugins with an injected default source
    * (files/feature): a url-less declaration falls back to that source.
    */
-  url: string;
+  url?: string;
   /**
    * options for the plugin. Top-level keys are public candidates (shareable
    * with other opted-in plugins, as far as the plugin declares them public);
@@ -277,7 +277,7 @@ export interface PluginContext {
   };
   /** read-only view over every helper registered by helper plugins */
   helpers: Record<string, (...args: any[]) => any>;
-  /** YAML utilities provided by Core (same subset parser Core itself uses) */
+  /** YAML utilities provided by Core (Bun's built-in YAML parser) */
   yaml: {
     parse(text: string): any;
   };
@@ -295,11 +295,16 @@ export interface PluginContext {
   events: {
     /** listen to a workflow event (built-in steps or injected custom events) */
     on(name: string, handler: (payload: any) => void | Promise<void>): void;
-    /** emit a plugin-local event; runs registered handlers, never touches the workflow */
+    /**
+     * emit a plugin-local event; runs registered handlers. Canonical
+     * pipeline step names are rejected — only the pipeline emits those.
+     */
     emit(name: string, payload?: any): Promise<void>;
     /**
      * inject a custom event into the main workflow after a built-in step.
-     * Throws unless the plugin is trusted via `plugin.<name>.allowCustomEvent: true`.
+     * Throws unless the plugin is trusted via
+     * `plugins.<key>.security.allowCustomEvent: true`, and rejects event
+     * names reserved by the pipeline.
      */
     injectAfter(afterStep: string, evt: { name: string; payload?: any }): Promise<void>;
   };

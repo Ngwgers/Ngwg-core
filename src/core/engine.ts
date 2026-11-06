@@ -12,9 +12,9 @@
 // A newer run invalidates the older one between steps (RunInterrupted).
 
 import * as path from "node:path";
-import { EventQueue, Steps, ALL_STEPS } from "../events/queue.ts";
+import { EventQueue, Steps, ALL_STEPS, isReservedStep, ReservedStepDenied } from "../events/queue.ts";
 import { Logger } from "../util/log.ts";
-import { ensureDir, exists, extOf, isDir, readBytes, readText, rimraf, walkFiles } from "../util/fs.ts";
+import { ensureDir, exists, extOf, isDir, readBytes, rimraf, walkFiles } from "../util/fs.ts";
 import { Pool, PoolAborted } from "../util/pool.ts";
 import {
   loadUserConfig,
@@ -83,7 +83,8 @@ export class Engine {
   private runToken = 0;
   private pluginContexts = new Map<string, PluginContext>();
   helperMap: Record<string, (...args: any[]) => any> = {};
-  private lastError: Error | null = null;
+  /** pool of the source-parse step currently in flight (aborted by a newer run) */
+  private parsePool: Pool | null = null;
   private opts: EngineOptions;
 
   constructor(public rootDir: string, opts: EngineOptions = {}) {
@@ -127,9 +128,11 @@ export class Engine {
       // implement the protocol — user configuration is never handed to them
       options,
       events: {
-        on: (name, handler) => queue.on(name, handler),
+        on: (name, handler) => queue.on(name, handler, pluginName),
         emit: async (name, payload) => {
-          // plugin-local emit: direct dispatch, never enters the workflow queue
+          // plugin-local emit: direct dispatch, never enters the workflow
+          // queue — and never reaches a canonical pipeline step
+          if (isReservedStep(name)) throw new ReservedStepDenied(pluginName, name);
           for (const h of queue.handlersFor(name)) await h(payload, { name, payload, source: pluginName });
         },
         injectAfter: (afterStep, evt) => queue.injectAfter(pluginName, afterStep, evt),
@@ -146,7 +149,10 @@ export class Engine {
   /** One build pass at the given reset level. Throws on fatal errors. */
   async run(opts: { reset: ResetLevel; changed?: string[] }): Promise<void> {
     const token = ++this.runToken;
-    this.lastError = null;
+    // a newer run supersedes the previous one: stop the parse pool still in
+    // flight (RunInterrupted covers the step boundaries, PoolAborted the work
+    // inside a step)
+    this.parsePool?.abort();
 
     const steps: string[] =
       opts.reset === "all"
@@ -160,7 +166,6 @@ export class Engine {
       for (const step of steps) {
         if (token !== this.runToken) throw new RunInterrupted();
         await this.queue.emit(step, { reset: opts.reset, changed: opts.changed ?? [] });
-        if (this.lastError) throw this.lastError;
       }
     } catch (e) {
       if (e instanceof RunInterrupted || e instanceof PoolAborted) return; // superseded, not an error
@@ -260,6 +265,9 @@ export class Engine {
       const config = this.currentConfig!;
       // theme config is already inside the loaded theme object
       const themeConfig = this._pendingTheme!.config;
+      // a full reload replaces every plugin: drop the handlers/trust/pending
+      // events the previous generation registered (Core step handlers stay)
+      this.queue.resetPlugins();
       this.pluginContexts.clear();
       this.helperMap = {};
       const result = await loadAllPlugins({
@@ -366,7 +374,7 @@ export class Engine {
   private refreshHelperMap() {
     this.helperMap = {};
     for (const h of this.state!.plugins.helpers) {
-      Object.assign(this.helperMap, h.helpers);
+      Object.assign(this.helperMap, h.unit.helpers);
     }
     for (const ctx of this.pluginContexts.values()) {
       ctx.helpers = this.helperMap;
@@ -409,22 +417,27 @@ export class Engine {
     // copy of the same file, whichever pool worker finished first
     const staged = new Map<string, SourceObject>();
     const walked = new Map<string, SourceObject>();
-    const pool = new Pool(8);
-    await pool.run(files, async (rel) => {
-      const abs = path.join(sourceDir, rel);
-      const ext = extOf(rel);
-      const entry = this.findParser(parsers, ext);
-      if (entry) {
-        const result = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), abs, await readBytes(abs));
-        const objs = (Array.isArray(result) ? result : [result]).filter((o): o is SourceObject => o != null);
-        for (const obj of objs) staged.set(obj.path, obj);
-        this.derivedByOwner.set(abs, objs.map((o) => o.path));
-        this.log.debug(`parse ${rel} via ${entry.unit.name} (${objs.length} object(s))`);
-      } else {
-        this.log.debug(`asset ${rel} (no parser for ${ext || "raw file"})`);
-        walked.set(abs, this.assetObject(sourceDir, abs, rel));
-      }
-    });
+    const pool = new Pool(this.opts.concurrency ?? 8);
+    this.parsePool = pool;
+    try {
+      await pool.run(files, async (rel) => {
+        const abs = path.join(sourceDir, rel);
+        const ext = extOf(rel);
+        const entry = this.findParser(parsers, ext);
+        if (entry) {
+          const result = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), abs, await readBytes(abs));
+          const objs = (Array.isArray(result) ? result : [result]).filter((o): o is SourceObject => o != null);
+          for (const obj of objs) staged.set(obj.path, obj);
+          this.derivedByOwner.set(abs, objs.map((o) => o.path));
+          this.log.debug(`parse ${rel} via ${entry.unit.name} (${objs.length} object(s))`);
+        } else {
+          this.log.debug(`asset ${rel} (no parser for ${ext || "raw file"})`);
+          walked.set(abs, this.assetObject(sourceDir, abs, rel));
+        }
+      });
+    } finally {
+      if (this.parsePool === pool) this.parsePool = null;
+    }
     sources.clear();
     for (const [p, obj] of walked) sources.set(p, obj);
     for (const [p, obj] of staged) sources.set(p, obj);
@@ -465,17 +478,23 @@ export class Engine {
       this.state.sources.set(file, this.assetObject(sourceDir, file, rel));
     }
 
-    for (const owner of reparse) {
-      for (const key of this.derivedByOwner.get(owner) ?? []) this.state.sources.delete(key);
-      this.derivedByOwner.delete(owner);
-      this.state.sources.delete(owner);
-      if (!(await exists(owner))) continue;
-      const entry = this.findParser(parsers, extOf(owner));
-      if (!entry) continue;
-      const result = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), owner, await readBytes(owner));
-      const objs = (Array.isArray(result) ? result : [result]).filter((o): o is SourceObject => o != null);
-      for (const obj of objs) this.state.sources.set(obj.path, obj);
-      this.derivedByOwner.set(owner, objs.map((o) => o.path));
+    const pool = new Pool(this.opts.concurrency ?? 8);
+    this.parsePool = pool;
+    try {
+      await pool.run([...reparse], async (owner) => {
+        for (const key of this.derivedByOwner.get(owner) ?? []) this.state!.sources.delete(key);
+        this.derivedByOwner.delete(owner);
+        this.state!.sources.delete(owner);
+        if (!(await exists(owner))) return;
+        const entry = this.findParser(parsers, extOf(owner));
+        if (!entry) return;
+        const result = await entry.unit.parseFile(this.pluginContexts.get(entry.plugin) ?? this.systemContext(), owner, await readBytes(owner));
+        const objs = (Array.isArray(result) ? result : [result]).filter((o): o is SourceObject => o != null);
+        for (const obj of objs) this.state!.sources.set(obj.path, obj);
+        this.derivedByOwner.set(owner, objs.map((o) => o.path));
+      });
+    } finally {
+      if (this.parsePool === pool) this.parsePool = null;
     }
   }
 
@@ -572,10 +591,10 @@ export class Engine {
     // helper plugins may generate extra artifacts into public/ (sitemap,
     // rss, …) once the pages are in place — protocol subset, fully optional
     for (const helper of st.plugins.helpers) {
-      if (!helper.afterDeploy) continue;
-      this.log.debug(`afterDeploy via helper "${helper.name}"`);
-      const hctx = this.pluginContexts.get(helper.name) ?? this.systemContext();
-      await helper.afterDeploy(hctx, env);
+      if (!helper.unit.afterDeploy) continue;
+      this.log.debug(`afterDeploy via helper "${helper.unit.name}"`);
+      const hctx = this.pluginContexts.get(helper.plugin) ?? this.systemContext();
+      await helper.unit.afterDeploy(hctx, env);
     }
     this.log.info(`deployed ${tasks.length} file(s) → ${publicDir}`);
   }
