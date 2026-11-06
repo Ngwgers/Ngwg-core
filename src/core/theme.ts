@@ -334,29 +334,51 @@ export async function loadTheme(
 }
 
 export function themeLayoutMap(theme: ThemeObject): Record<string, string> {
-  return { ...DEFAULT_LAYOUTS, ...(theme.config.layouts ?? {}) };
+  const configured = { ...DEFAULT_LAYOUTS, ...(theme.config.layouts ?? {}) };
+  const layouts = theme.layouts;
+  const resolved: Record<string, string> = {};
+  for (const kind of Object.keys(configured)) {
+    const name = configured[kind];
+    // optional layouts (404) opt in by shipping the exact file
+    if (layouts[name]) {
+      resolved[kind] = name;
+      continue;
+    }
+    if (kind === "notFound") {
+      resolved[kind] = name;
+      continue;
+    }
+    // every other missing layout falls back to the configured page layout,
+    // then to index — matching what the page deployer does at render time
+    if (layouts[configured.page]) resolved[kind] = configured.page;
+    else resolved[kind] = configured.index;
+  }
+  return resolved;
 }
 
 /**
- * The source extension of the layout a page task renders with. Mirrors the
- * deployer's graceful fallback (an unknown page/post layout falls back to
- * "index") so suffix-based dispatch picks the engine that will actually
- * render the resolved layout.
+ * The source extension of the layout a page task renders with. Task building
+ * already resolves layout fallbacks (see themeLayoutMap), but an explicit
+ * `layout:` frontmatter may still name a missing template; mirror the page
+ * deployer's fallback (page → index) so suffix-based dispatch picks the
+ * engine that will actually render the resolved layout.
  */
 export function themeLayoutExt(theme: ThemeObject, name: string): string | undefined {
   const exts = theme.layoutExts ?? {};
   if (name in exts) return exts[name];
-  for (const fallback of ["page", "index"]) if (fallback in exts) return exts[fallback];
+  const configured = themeLayoutMap(theme);
+  for (const fallback of [configured.page, configured.index]) {
+    if (fallback in exts) return exts[fallback];
+  }
   return undefined;
 }
 
 /** Check an output file is inside publicDir (guards against path traversal). */
 export function safeJoin(publicDir: string, relPath: string): string {
-  const abs = path.resolve(publicDir, relPath);
-  if (!abs.startsWith(path.resolve(publicDir) + path.sep) && abs !== path.resolve(publicDir)) {
+  const root = path.resolve(publicDir);
+  const abs = path.resolve(root, relPath.replace(/^[/\\]+/, ""));
+  if (abs !== root && !abs.startsWith(root + path.sep)) {
     throw new ThemeError(`refusing to write outside public dir: ${relPath}`);
   }
   return abs;
 }
-
-export { exists };

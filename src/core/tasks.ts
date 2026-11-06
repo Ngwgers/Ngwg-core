@@ -5,7 +5,7 @@
 
 import * as path from "node:path";
 import type { RenderTask, SiteData, SourceObject, ThemeObject } from "../types.ts";
-import { themeLayoutExt, themeLayoutMap } from "./theme.ts";
+import { safeJoin, themeLayoutExt, themeLayoutMap } from "./theme.ts";
 
 export function slugify(s: string): string {
   return (
@@ -18,7 +18,7 @@ export function slugify(s: string): string {
 }
 
 function outPath(publicDir: string, url: string): string {
-  return path.join(publicDir, url.replace(/^\//, ""), "index.html");
+  return safeJoin(publicDir, path.join(url.replace(/^\//, ""), "index.html"));
 }
 
 /**
@@ -83,7 +83,7 @@ export function buildRenderTasks(
   // feeds must not advertise the error page.
   if (theme.layouts[layouts.notFound]) {
     addTask({
-      outPath: path.join(publicDir, "404.html"),
+      outPath: safeJoin(publicDir, "404.html"),
       template: layouts.notFound,
       templateExt: themeLayoutExt(theme, layouts.notFound),
       context: pageContext(
@@ -118,11 +118,8 @@ export function buildRenderTasks(
     );
   }
 
-  // archives: /archives/
-  const groups = site.archives.map((g) => ({
-    ...g,
-    url: `/archives/#${slugify(g.name)}`,
-  }));
+  // archives: /archives/ (group URLs were already computed by buildSiteData)
+  const groups = site.archives;
   addTask(pageTask("/archives/", layouts.archive, pageContext({ ...site, archives: groups }, { archives: groups }, helpers, theme.config as Record<string, any>)));
 
   // tag pages: /tags/<slug>/ (raw UTF-8 slug — matches template hrefs)
@@ -138,7 +135,7 @@ export function buildRenderTasks(
   // theme assets
   for (const asset of theme.assets) {
     tasks.push({
-      outPath: path.join(publicDir, asset.relPath),
+      outPath: safeJoin(publicDir, asset.relPath),
       copy: { content: asset.content },
     });
   }
@@ -148,7 +145,7 @@ export function buildRenderTasks(
   // location) deploy there; plain assets mirror the source tree.
   for (const asset of sourceAssets) {
     tasks.push({
-      outPath: path.join(publicDir, asset.url || asset.relPath),
+      outPath: safeJoin(publicDir, asset.url || asset.relPath),
       copy: { content: asset.raw ?? new Uint8Array() },
     });
   }
